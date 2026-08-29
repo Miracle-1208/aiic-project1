@@ -46,14 +46,33 @@ export function buildReport(state: GroupState): SessionReport {
   const bestEvent = [...state.influence]
     .reverse()
     .find((event) => event.tone === "positive");
+  const assessments = state.assessments ?? [];
+  const bestAssessment = [...assessments].sort((a, b) => {
+    const qualityScore = { strong: 3, developing: 2, weak: 1 };
+    const qualityDifference = qualityScore[b.quality] - qualityScore[a.quality];
+    if (qualityDifference !== 0) return qualityDifference;
+    const totalA = Object.values(a.scoreDeltas).reduce((sum, value) => sum + value, 0);
+    const totalB = Object.values(b.scoreDeltas).reduce((sum, value) => sum + value, 0);
+    return totalB - totalA;
+  })[0];
+  const nextAction = [...assessments]
+    .reverse()
+    .find((assessment) => assessment.quality !== "strong")?.suggestion;
 
   return {
     total,
     level: total >= 85 ? "团队催化者" : total >= 70 ? "可靠推进者" : "积极参与者",
     dimensions,
-    strength: `你的“${strengthDimension.label}”最突出。${strengthDimension.summary}。`,
-    focus: `下一轮只练一个动作：在发言前先复述一条他人观点，再补充你的增量，以提升“${focusDimension.label}”。`,
+    strength: bestAssessment
+      ? `第 ${bestAssessment.turn} 轮的“${bestAssessment.impactTitle}”最突出，也带动了你的“${strengthDimension.label}”。`
+      : `你的“${strengthDimension.label}”最突出。${strengthDimension.summary}。`,
+    focus:
+      nextAction ??
+      `下一轮只练一个动作：在发言前先复述一条他人观点，再补充你的增量，以提升“${focusDimension.label}”。`,
     evidence:
-      bestEvent?.detail ?? "你已经参与讨论；下一轮需要让每次发言都对应一次可观察的团队状态变化。",
+      bestAssessment
+        ? `“${bestAssessment.evidence}”——${bestAssessment.impactDetail}`
+        : bestEvent?.detail ??
+          "你已经参与讨论；下一轮需要让每次发言都对应一次可观察的团队状态变化。",
   };
 }

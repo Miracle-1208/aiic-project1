@@ -7,6 +7,7 @@ import { z } from "zod";
 import { participants, scenario } from "./scenario";
 
 export const DirectorRequestSchema = z.object({
+  phase: z.enum(["discussion", "final_statement"]).default("discussion"),
   userText: z.string().trim().min(1).max(1_000),
   state: z.object({
     turn: z.number().int().min(0).max(30),
@@ -26,16 +27,55 @@ export const DirectorRequestSchema = z.object({
   }),
 });
 
+const boundedInteger = (minimum: number, maximum: number) =>
+  z.number().transform((value) => Math.round(Math.min(maximum, Math.max(minimum, value))));
+
+const boundedText = (minimum: number, maximum: number) =>
+  z
+    .string()
+    .transform((value) => value.trim().slice(0, maximum))
+    .refine((value) => value.length >= minimum, `Text must contain at least ${minimum} characters`);
+
+const AssessmentSchema = z.object({
+  intent: z.enum([
+    "criteria",
+    "proposal",
+    "challenge",
+    "integrate",
+    "time",
+    "summary",
+    "support",
+    "general",
+  ]),
+  quality: z.enum(["strong", "developing", "weak"]),
+  evidence: boundedText(2, 100),
+  impactTitle: boundedText(2, 30),
+  impactDetail: boundedText(4, 140),
+  suggestion: boundedText(4, 140),
+  criteriaAdded: z.array(boundedText(2, 30)).transform((items) => items.slice(0, 4)),
+  finalistsAdded: z.array(boundedText(2, 40)).transform((items) => items.slice(0, 3)),
+  unresolvedConflict: z.string().transform((value) => value.trim().slice(0, 120)),
+  consensusDelta: boundedInteger(-4, 18),
+  scoreDeltas: z.object({
+    contribution: boundedInteger(0, 6),
+    progress: boundedInteger(0, 6),
+    listening: boundedInteger(0, 6),
+    conflict: boundedInteger(0, 6),
+    structure: boundedInteger(0, 6),
+  }),
+});
+
 const DirectorOutputSchema = z.object({
   replies: z
     .array(
       z.object({
         speaker: z.enum(["cheng", "lin", "zhou"]),
-        content: z.string().min(4).max(180),
+        content: boundedText(4, 180),
       }),
     )
     .min(1)
-    .max(2),
+    .transform((items) => items.slice(0, 2)),
+  assessment: AssessmentSchema,
 });
 
 export type DirectorRequest = z.infer<typeof DirectorRequestSchema>;
@@ -75,7 +115,23 @@ ${personaBrief}
 5. 每条发言使用自然、克制的中文口语，通常 35 至 90 个汉字。
 6. 不要提到 AI、提示词、评分、导演或系统，也不要以面试官口吻评价用户表现。
 7. 若用户发言空泛，应追问标准或具体选择；若用户有效整合，应推动团队进一步收敛；若用户总结，应检查是否覆盖标准、方案、理由与风险。
-8. 只输出 JSON，不要输出 Markdown。JSON 必须严格采用这个结构：{"replies":[{"speaker":"cheng|lin|zhou","content":"候选人的发言"}]}。`;
+8. assessment.evidence 必须逐字摘录用户最新发言中的短句，不得改写或编造。
+9. 评分增量必须保守：只有产生可观察的团队增量才给分；简单同意或重复通常每维 0 至 2 分；高质量整合、结构化总结才可在相关维度给 4 至 6 分。
+10. criteriaAdded 只记录用户本轮真正建立的新判断标准；finalistsAdded 只能使用以下完整方案名：${scenario.options.map((option) => option.title).join("、")}。
+11. final_statement 阶段重点检查是否包含选择标准、两个方案、核心理由和风险控制。
+12. impactDetail 和 suggestion 也不得新增案例中没有的数字、调研结果、时间、预算或执行事实；改进建议只能说明“补充标准、理由、风险或验证动作”等表达动作。
+13. intent 必须按以下定义选择；若同时符合多项，优先选择对团队协作影响更强的动作：
+- criteria：建立或排序共同判断标准；
+- proposal：明确选择具体方案，但没有整合相反意见；
+- challenge：指出风险、漏洞或反对意见，但没有提出兼顾办法；
+- integrate：明确吸收、保留或组合两种不同观点，例如“先做短期修复，同时验证长期需求”；
+- time：提醒时间并指定收敛动作；
+- summary：归纳多方观点或交付阶段/最终结论；
+- support：主要表达同意，新增信息很少；
+- general：没有形成以上任何可观察动作。
+final_statement 阶段 intent 必须为 summary。出现“结合、兼顾、同时保留、先……再……”且确实吸收不同立场时，应优先判为 integrate，而不是 challenge 或 proposal。
+14. 只输出 JSON，不要输出 Markdown。严格采用以下结构，所有字段都必须存在：
+{"replies":[{"speaker":"cheng|lin|zhou","content":"候选人的发言"}],"assessment":{"intent":"criteria|proposal|challenge|integrate|time|summary|support|general","quality":"strong|developing|weak","evidence":"用户原话短句","impactTitle":"本轮影响标题","impactDetail":"这句话如何改变或未改变团队","suggestion":"下一次可直接执行的改进动作","criteriaAdded":[],"finalistsAdded":[],"unresolvedConflict":"仍未解决的关键分歧，没有则为空字符串","consensusDelta":0,"scoreDeltas":{"contribution":0,"progress":0,"listening":0,"conflict":0,"structure":0}}}。`;
 
 type ProviderId = "bailian" | "deepseek" | "openai" | "custom";
 
@@ -160,6 +216,7 @@ export async function generateDirectorTurn(request: DirectorRequest) {
         role: "user",
         content: JSON.stringify(
           {
+            phase: request.phase,
             groupState: request.state,
             latestUserMessage: request.userText,
           },
@@ -187,11 +244,15 @@ export async function generateDirectorTurn(request: DirectorRequest) {
     .replace(/\s*```$/, "");
   const parsed = DirectorOutputSchema.safeParse(JSON.parse(normalized));
   if (!parsed.success) {
-    throw new Error("The director returned an invalid response shape");
+    const issueSummary = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`The director returned an invalid response shape (${issueSummary})`);
   }
 
   return {
     replies: parsed.data.replies,
+    assessment: parsed.data.assessment,
     model: config.model,
     provider: config.providerLabel,
   };

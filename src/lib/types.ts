@@ -19,6 +19,10 @@ export type ScoreKey =
   | "conflict"
   | "structure";
 
+export type ScoreState = Record<ScoreKey, number>;
+
+export type AssessmentQuality = "strong" | "developing" | "weak";
+
 export interface Participant {
   id: Exclude<SpeakerId, "system">;
   name: string;
@@ -64,15 +68,41 @@ export interface DirectorReply {
   content: string;
 }
 
+export interface DirectorAssessment {
+  intent: Intent;
+  quality: AssessmentQuality;
+  evidence: string;
+  impactTitle: string;
+  impactDetail: string;
+  suggestion: string;
+  criteriaAdded: string[];
+  finalistsAdded: string[];
+  unresolvedConflict: string;
+  consensusDelta: number;
+  scoreDeltas: ScoreState;
+}
+
+export interface DirectorTurn {
+  replies: DirectorReply[];
+  assessment?: DirectorAssessment;
+}
+
+export interface TurnAssessment extends DirectorAssessment {
+  id: string;
+  turn: number;
+  source: "ai" | "fallback";
+}
+
 export interface InfluenceEvent {
   id: string;
   turn: number;
   title: string;
   detail: string;
   tone: "positive" | "neutral" | "warning";
+  evidence?: string;
+  suggestion?: string;
+  source?: "ai" | "fallback";
 }
-
-export type ScoreState = Record<ScoreKey, number>;
 
 export interface GroupState {
   turn: number;
@@ -83,6 +113,7 @@ export interface GroupState {
   conflict: string;
   messages: Message[];
   influence: InfluenceEvent[];
+  assessments: TurnAssessment[];
   scores: ScoreState;
   finalStatement: string;
 }

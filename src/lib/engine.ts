@@ -1,6 +1,9 @@
 import { openingMessages, scenario } from "./scenario";
 import type {
+  AssessmentQuality,
+  DirectorAssessment,
   DirectorReply,
+  DirectorTurn,
   GroupState,
   InfluenceEvent,
   Intent,
@@ -8,6 +11,7 @@ import type {
   ScoreKey,
   ScoreState,
   SpeakerId,
+  TurnAssessment,
 } from "./types";
 
 const SCORE_MAX: ScoreState = {
@@ -68,6 +72,9 @@ function influence(
   title: string,
   detail: string,
   tone: InfluenceEvent["tone"] = "positive",
+  evidence?: string,
+  suggestion?: string,
+  source?: InfluenceEvent["source"],
 ): InfluenceEvent {
   return {
     id: `event-${turn}-${title}`,
@@ -75,6 +82,9 @@ function influence(
     title,
     detail,
     tone,
+    evidence,
+    suggestion,
+    source,
   };
 }
 
@@ -86,6 +96,20 @@ function clampScores(current: ScoreState, delta: Partial<ScoreState>): ScoreStat
     },
     { ...current },
   );
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function completeScoreDelta(delta: Partial<ScoreState>): ScoreState {
+  return {
+    contribution: delta.contribution ?? 0,
+    progress: delta.progress ?? 0,
+    listening: delta.listening ?? 0,
+    conflict: delta.conflict ?? 0,
+    structure: delta.structure ?? 0,
+  };
 }
 
 function includesAny(text: string, words: string[]) {
@@ -269,19 +293,190 @@ function directorResponses(
   );
 }
 
-function eventForIntent(intent: Intent, turn: number): InfluenceEvent {
-  const events: Record<Intent, [string, string, InfluenceEvent["tone"]]> = {
-    criteria: ["建立共同标准", "你把讨论从个人偏好拉回到一套可共同使用的判断尺度。", "positive"],
-    proposal: ["提出可比较方案", "你给出了明确选择，帮助小组减少了仍需讨论的选项。", "positive"],
-    challenge: ["暴露方案风险", "你没有直接附和，而是让团队处理一个尚未回答的问题。", "neutral"],
-    integrate: ["整合对立意见", "你保留了不同观点中的有效部分，共识出现明显提升。", "positive"],
-    time: ["接管讨论节奏", "你提醒团队收敛，避免在截止前仍停留在发散状态。", "positive"],
-    summary: ["形成阶段结论", "你把零散观点整理成可以继续决策的结构。", "positive"],
-    support: ["回应他人观点", "你表达了支持，但还可以进一步说明支持的理由和增量。", "neutral"],
-    general: ["发言尚未形成增量", "这次发言参与了讨论，但对方案或协作状态的改变较少。", "warning"],
+const INTENT_FEEDBACK: Record<
+  Intent,
+  { title: string; detail: string; suggestion: string; quality: AssessmentQuality }
+> = {
+  criteria: {
+    title: "建立共同标准",
+    detail: "你把讨论从个人偏好拉回到一套可共同使用的判断尺度。",
+    suggestion: "下一次把标准压缩为三项，并明确它们的优先顺序。",
+    quality: "strong",
+  },
+  proposal: {
+    title: "提出可比较方案",
+    detail: "你给出了明确选择，帮助小组减少了仍需讨论的选项。",
+    suggestion: "补充不选择其他方案的理由，让取舍更有说服力。",
+    quality: "developing",
+  },
+  challenge: {
+    title: "暴露方案风险",
+    detail: "你没有直接附和，而是让团队处理一个尚未回答的问题。",
+    suggestion: "质疑后紧接一个验证办法，避免团队停留在否定阶段。",
+    quality: "developing",
+  },
+  integrate: {
+    title: "整合对立意见",
+    detail: "你保留了不同观点中的有效部分，共识出现明显提升。",
+    suggestion: "进一步明确整合方案的先后顺序和验证节点。",
+    quality: "strong",
+  },
+  time: {
+    title: "接管讨论节奏",
+    detail: "你提醒团队收敛，避免在截止前仍停留在发散状态。",
+    suggestion: "时间提醒后立即给出下一步动作和负责人。",
+    quality: "strong",
+  },
+  summary: {
+    title: "形成阶段结论",
+    detail: "你把零散观点整理成可以继续决策的结构。",
+    suggestion: "总结时同时覆盖标准、选择、理由和风险。",
+    quality: "strong",
+  },
+  support: {
+    title: "回应他人观点",
+    detail: "你表达了支持，但尚未清楚说明支持的理由和新增价值。",
+    suggestion: "先复述对方的关键判断，再补充一个新的证据或取舍。",
+    quality: "developing",
+  },
+  general: {
+    title: "发言尚未形成增量",
+    detail: "这次发言参与了讨论，但对方案或协作状态的改变较少。",
+    suggestion: "下一句话至少补充一个判断标准、具体方案或推进动作。",
+    quality: "weak",
+  },
+};
+
+function fallbackAssessment(text: string, intent: Intent): DirectorAssessment {
+  const feedback = INTENT_FEEDBACK[intent];
+  return {
+    intent,
+    quality: feedback.quality,
+    evidence: text.slice(0, 100),
+    impactTitle: feedback.title,
+    impactDetail: feedback.detail,
+    suggestion: feedback.suggestion,
+    criteriaAdded: intent === "criteria" ? extractCriteria(text) : [],
+    finalistsAdded: extractOptions(text),
+    unresolvedConflict: "",
+    consensusDelta: CONSENSUS_DELTA[intent],
+    scoreDeltas: completeScoreDelta(SCORE_DELTA[intent]),
   };
-  const [title, detail, tone] = events[intent];
-  return influence(turn, title, detail, tone);
+}
+
+function fallbackFinalAssessment(statement: string): DirectorAssessment {
+  const includesRisk = includesAny(statement, ["风险", "验证", "控制", "避免"]);
+  return {
+    intent: "summary",
+    quality: includesRisk ? "strong" : "developing",
+    evidence: statement.slice(0, 100),
+    impactTitle: "完成小组陈述",
+    impactDetail: includesRisk
+      ? "你把选择标准、方案、理由和风险控制放进了同一叙事。"
+      : "你交付了小组结论，但风险控制还可以表达得更明确。",
+    suggestion: includesRisk
+      ? "下一轮继续压缩表达，用一句话先交付结论。"
+      : "在结尾补充一个主要风险和对应的验证动作。",
+    criteriaAdded: extractCriteria(statement),
+    finalistsAdded: extractOptions(statement),
+    unresolvedConflict: "",
+    consensusDelta: includesRisk ? 12 : 7,
+    scoreDeltas: {
+      contribution: 3,
+      progress: 5,
+      listening: 3,
+      conflict: includesRisk ? 3 : 1,
+      structure: includesRisk ? 6 : 4,
+    },
+  };
+}
+
+function materializeAssessment(
+  text: string,
+  turn: number,
+  fallback: DirectorAssessment,
+  supplied?: DirectorAssessment,
+): TurnAssessment {
+  const assessment = supplied ?? fallback;
+  const allowedOptions = new Set(scenario.options.map((option) => option.title));
+  const source = supplied ? "ai" : "fallback";
+  const evidence = text.includes(assessment.evidence.trim())
+    ? assessment.evidence.trim()
+    : text.slice(0, 100);
+  const proposedSuggestion = assessment.suggestion
+    .trim()
+    .replace(/^(?:下一步|建议)\s*[：:，,]?\s*/, "")
+    .slice(0, 140);
+  const suggestionNumbers = proposedSuggestion.match(
+    /\d+(?:\.\d+)?(?:周|天|人|次|万|%|％)|[一二三四五六七八九十百]+(?:周|天|人|次|万)/g,
+  );
+  const suggestionIntroducesNumbers = suggestionNumbers?.some(
+    (number) => !text.includes(number),
+  );
+  const strongConsensusFloor: Record<Intent, number> = {
+    criteria: 5,
+    proposal: 3,
+    challenge: 0,
+    integrate: 8,
+    time: 5,
+    summary: 8,
+    support: 2,
+    general: 0,
+  };
+  const consensusFloor = assessment.quality === "strong" ? strongConsensusFloor[assessment.intent] : -4;
+  const scoreDeltas = (Object.keys(fallback.scoreDeltas) as ScoreKey[]).reduce<ScoreState>(
+    (next, key) => {
+      next[key] = clamp(Number(assessment.scoreDeltas[key]) || 0, 0, 6);
+      return next;
+    },
+    { ...fallback.scoreDeltas },
+  );
+
+  return {
+    ...assessment,
+    id: `assessment-${turn}-${source}`,
+    turn,
+    source,
+    evidence,
+    impactTitle: assessment.impactTitle.trim().slice(0, 30) || fallback.impactTitle,
+    impactDetail: assessment.impactDetail.trim().slice(0, 140) || fallback.impactDetail,
+    suggestion:
+      !proposedSuggestion || suggestionIntroducesNumbers
+        ? fallback.suggestion
+        : proposedSuggestion,
+    criteriaAdded: unique(assessment.criteriaAdded.map((item) => item.trim()).filter(Boolean)).slice(
+      0,
+      4,
+    ),
+    finalistsAdded: unique(
+      assessment.finalistsAdded.map((item) => item.trim()).filter((item) => allowedOptions.has(item)),
+    ).slice(0, 3),
+    unresolvedConflict: assessment.unresolvedConflict.trim().slice(0, 120),
+    consensusDelta: clamp(
+      Math.max(Number(assessment.consensusDelta) || 0, consensusFloor),
+      -4,
+      18,
+    ),
+    scoreDeltas,
+  };
+}
+
+function eventFromAssessment(assessment: TurnAssessment): InfluenceEvent {
+  const tone: InfluenceEvent["tone"] =
+    assessment.quality === "strong"
+      ? "positive"
+      : assessment.quality === "weak"
+        ? "warning"
+        : "neutral";
+  return influence(
+    assessment.turn,
+    assessment.impactTitle,
+    assessment.impactDetail,
+    tone,
+    assessment.evidence,
+    assessment.suggestion,
+    assessment.source,
+  );
 }
 
 export function createInitialState(): GroupState {
@@ -296,6 +491,7 @@ export function createInitialState(): GroupState {
       message(item.speaker, item.content, 0 + index / 10),
     ),
     influence: [],
+    assessments: [],
     scores: {
       contribution: 5,
       progress: 4,
@@ -310,17 +506,24 @@ export function createInitialState(): GroupState {
 export function applyUserTurn(
   state: GroupState,
   rawText: string,
-  directorReplies?: DirectorReply[],
+  directorTurn?: DirectorTurn,
 ): GroupState {
   const text = rawText.trim();
   if (!text) return state;
 
   const turn = state.turn + 1;
-  const intent = classifyIntent(text);
+  const fallback = fallbackAssessment(text, classifyIntent(text));
+  const assessment = materializeAssessment(text, turn, fallback, directorTurn?.assessment);
+  const intent = assessment.intent;
   const userMessage = message("user", text, turn, intent);
-  const aiMessages = directorResponses(intent, turn, text, directorReplies);
-  const criteria = intent === "criteria" ? unique([...state.criteria, ...extractCriteria(text)]) : state.criteria;
-  const proposedOptions = extractOptions(text);
+  const aiMessages = directorResponses(intent, turn, text, directorTurn?.replies);
+  const inferredCriteria = intent === "criteria" ? extractCriteria(text) : [];
+  const criteria = unique([
+    ...state.criteria,
+    ...inferredCriteria,
+    ...assessment.criteriaAdded,
+  ]).slice(-8);
+  const proposedOptions = unique([...extractOptions(text), ...assessment.finalistsAdded]);
   const finalists =
     proposedOptions.length > 0
       ? unique([...state.finalists, ...proposedOptions]).slice(-3)
@@ -328,8 +531,9 @@ export function applyUserTurn(
         ? ["修复消息提醒", "优化新用户引导"]
         : state.finalists;
 
-  const conflict =
-    intent === "integrate" || intent === "summary"
+  const conflict = assessment.unresolvedConflict
+    ? assessment.unresolvedConflict
+    : intent === "integrate" || intent === "summary"
       ? "如何同时兼顾快速修复与长期验证？"
       : intent === "challenge"
         ? "新提出的风险是否会改变当前选择？"
@@ -338,58 +542,61 @@ export function applyUserTurn(
   return {
     ...state,
     turn,
-    consensus: Math.min(94, state.consensus + CONSENSUS_DELTA[intent]),
+    consensus: clamp(state.consensus + assessment.consensusDelta, 8, 94),
     criteria,
     finalists,
     conflict,
     messages: [...state.messages, userMessage, ...aiMessages],
-    influence: [...state.influence, eventForIntent(intent, turn)],
-    scores: clampScores(state.scores, SCORE_DELTA[intent]),
+    influence: [...state.influence, eventFromAssessment(assessment)],
+    assessments: [...(state.assessments ?? []), assessment],
+    scores: clampScores(state.scores, assessment.scoreDeltas),
   };
 }
 
-export function finishSession(state: GroupState, rawStatement: string): GroupState {
+export function finishSession(
+  state: GroupState,
+  rawStatement: string,
+  directorTurn?: DirectorTurn,
+): GroupState {
   const statement = rawStatement.trim();
   if (!statement) return state;
 
   const turn = state.turn + 1;
-  const finishDelta: Partial<ScoreState> = {
-    contribution: 3,
-    progress: 5,
-    listening: 3,
-    conflict: 2,
-    structure: 6,
-  };
+  const assessment = materializeAssessment(
+    statement,
+    turn,
+    fallbackFinalAssessment(statement),
+    directorTurn?.assessment,
+  );
 
-  const finalOptions = unique([...state.finalists, ...extractOptions(statement)]);
+  const finalOptions = unique([
+    ...state.finalists,
+    ...extractOptions(statement),
+    ...assessment.finalistsAdded,
+  ]);
 
   return {
     ...state,
     turn,
-    consensus: Math.max(86, state.consensus),
+    consensus: clamp(state.consensus + Math.max(0, assessment.consensusDelta), 8, 96),
     finalStatement: statement,
+    criteria: unique([...state.criteria, ...assessment.criteriaAdded]).slice(-8),
     finalists:
       finalOptions.length >= 2
         ? finalOptions.slice(0, 2)
         : unique([...finalOptions, "修复消息提醒", "优化新用户引导"]).slice(0, 2),
     messages: [
       ...state.messages,
-      message("user", statement, turn, "summary"),
+      message("user", statement, turn, assessment.intent),
       message(
         "system",
         "群面结束。系统正在把你的发言与团队状态变化对应起来。",
         turn + 0.1,
       ),
     ],
-    influence: [
-      ...state.influence,
-      influence(
-        turn,
-        "完成小组陈述",
-        "你代表小组交付了结论，并将选择标准、方案与风险放进同一叙事。",
-      ),
-    ],
-    scores: clampScores(state.scores, finishDelta),
+    influence: [...state.influence, eventFromAssessment(assessment)],
+    assessments: [...(state.assessments ?? []), assessment],
+    scores: clampScores(state.scores, assessment.scoreDeltas),
   };
 }
 

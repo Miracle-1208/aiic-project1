@@ -32,17 +32,38 @@ describe("group interview engine", () => {
     expect(next.influence.at(-1)?.title).toBe("建立共同标准");
   });
 
-  it("uses live director replies while preserving deterministic state updates", () => {
+  it("uses live replies and evidence while keeping score changes bounded", () => {
     const initial = createInitialState();
     const next = applyUserTurn(
       initial,
       "我建议先按用户影响和上线周期比较。",
-      [
-        {
-          speaker: "zhou",
-          content: "标准可以，但还需要把预算约束放进同一张比较表。",
+      {
+        replies: [
+          {
+            speaker: "zhou",
+            content: "标准可以，但还需要把预算约束放进同一张比较表。",
+          },
+        ],
+        assessment: {
+          intent: "criteria",
+          quality: "strong",
+          evidence: "用户影响和上线周期",
+          impactTitle: "建立比较框架",
+          impactDetail: "你把两个判断维度带入讨论，团队可以据此比较方案。",
+          suggestion: "下一步补上预算维度并说明三个标准的优先级。",
+          criteriaAdded: ["用户影响", "实施确定性"],
+          finalistsAdded: [],
+          unresolvedConflict: "三个标准如何排序？",
+          consensusDelta: 11,
+          scoreDeltas: {
+            contribution: 5,
+            progress: 4,
+            listening: 1,
+            conflict: 0,
+            structure: 4,
+          },
         },
-      ],
+      },
     );
 
     expect(next.messages.at(-1)).toMatchObject({
@@ -52,6 +73,12 @@ describe("group interview engine", () => {
     expect(next.criteria).toEqual(
       expect.arrayContaining(["用户影响", "实施确定性"]),
     );
+    expect(next.assessments.at(-1)).toMatchObject({
+      source: "ai",
+      evidence: "用户影响和上线周期",
+      impactTitle: "建立比较框架",
+    });
+    expect(next.influence.at(-1)?.suggestion).toBe("补上预算维度并说明三个标准的优先级。");
   });
 
   it("keeps score dimensions within the declared 100-point ceiling", () => {
@@ -70,6 +97,45 @@ describe("group interview engine", () => {
     expect(Object.values(state.scores).reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(100);
     expect(state.consensus).toBeLessThanOrEqual(100);
     expect(state.finalists).toEqual(
+      expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
+    );
+  });
+
+  it("keeps AI coaching grounded when it introduces a new numeric commitment", () => {
+    const initial = createInitialState();
+    const statement =
+      "我们依据用户影响、投入产出和上线周期，选择消息提醒与新用户引导，并持续验证长期需求。";
+    const next = finishSession(initial, statement, {
+      replies: [
+        {
+          speaker: "cheng",
+          content: "结论清楚，我同意按这个结构完成陈述。",
+        },
+      ],
+      assessment: {
+        intent: "summary",
+        quality: "strong",
+        evidence: "选择消息提醒与新用户引导",
+        impactTitle: "交付小组结论",
+        impactDetail: "你完成了方案选择并说明了后续验证方向。",
+        suggestion: "两周后增加一次回访问卷。",
+        criteriaAdded: ["用户影响", "投入产出比", "实施确定性"],
+        finalistsAdded: ["修复消息提醒", "优化新用户引导"],
+        unresolvedConflict: "",
+        consensusDelta: 18,
+        scoreDeltas: {
+          contribution: 4,
+          progress: 6,
+          listening: 3,
+          conflict: 2,
+          structure: 6,
+        },
+      },
+    });
+
+    expect(next.assessments.at(-1)?.source).toBe("ai");
+    expect(next.assessments.at(-1)?.suggestion).not.toContain("两周");
+    expect(next.finalists).toEqual(
       expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
     );
   });
