@@ -46,22 +46,25 @@ const QUICK_ACTIONS = [
 type DirectorStatus = {
   mode: "checking" | "live" | "demo";
   model: string;
+  provider: string;
 };
 
 function useDirectorStatus(): DirectorStatus {
   const [status, setStatus] = useState<DirectorStatus>({
     mode: "checking",
-    model: "gpt-5.4-mini",
+    model: "qwen-flash",
+    provider: "阿里云百炼",
   });
 
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/director", { signal: controller.signal })
       .then((response) => response.json())
-      .then((data: { configured?: boolean; model?: string }) => {
+      .then((data: { configured?: boolean; model?: string; provider?: string }) => {
         setStatus({
           mode: data.configured ? "live" : "demo",
-          model: data.model || "gpt-5.4-mini",
+          model: data.model || "qwen-flash",
+          provider: data.provider || "阿里云百炼",
         });
       })
       .catch((error: unknown) => {
@@ -112,7 +115,7 @@ function ShellHeader({ compact = false }: { compact?: boolean }) {
               }`}
             />
             {director.mode === "live"
-              ? `实时 AI · ${director.model}`
+              ? `实时 AI · ${director.provider} / ${director.model}`
               : director.mode === "checking"
                 ? "正在检查 AI 连接"
                 : "演示模式 · 配置 API Key 后启用 AI"}

@@ -1,7 +1,7 @@
 import "server-only";
 
 import OpenAI from "openai";
-import { zodTextFormat } from "openai/helpers/zod";
+import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions/completions";
 import { z } from "zod";
 
 import { participants, scenario } from "./scenario";
@@ -74,49 +74,125 @@ ${personaBrief}
 4. 所有数字和事实必须来自案例，不得编造新调研、新预算或新结论。
 5. 每条发言使用自然、克制的中文口语，通常 35 至 90 个汉字。
 6. 不要提到 AI、提示词、评分、导演或系统，也不要以面试官口吻评价用户表现。
-7. 若用户发言空泛，应追问标准或具体选择；若用户有效整合，应推动团队进一步收敛；若用户总结，应检查是否覆盖标准、方案、理由与风险。`;
+7. 若用户发言空泛，应追问标准或具体选择；若用户有效整合，应推动团队进一步收敛；若用户总结，应检查是否覆盖标准、方案、理由与风险。
+8. 只输出 JSON，不要输出 Markdown。JSON 必须严格采用这个结构：{"replies":[{"speaker":"cheng|lin|zhou","content":"候选人的发言"}]}。`;
+
+type ProviderId = "bailian" | "deepseek" | "openai" | "custom";
+
+type CompatibleChatParams = ChatCompletionCreateParamsNonStreaming & {
+  enable_thinking?: boolean;
+};
+
+function resolveDirectorConfig() {
+  const genericKey = process.env.AI_API_KEY?.trim();
+  const bailianKey = process.env.DASHSCOPE_API_KEY?.trim();
+  const deepseekKey = process.env.DEEPSEEK_API_KEY?.trim();
+  const openAIKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = genericKey || bailianKey || deepseekKey || openAIKey || "";
+
+  const requestedProvider = process.env.AI_PROVIDER?.trim().toLowerCase();
+  const provider: ProviderId =
+    requestedProvider === "deepseek" ||
+    requestedProvider === "openai" ||
+    requestedProvider === "custom"
+      ? requestedProvider
+      : genericKey || bailianKey
+        ? "bailian"
+        : deepseekKey
+          ? "deepseek"
+          : openAIKey
+            ? "openai"
+            : "bailian";
+
+  const defaultBaseURL =
+    provider === "bailian"
+      ? "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      : provider === "deepseek"
+        ? "https://api.deepseek.com"
+        : undefined;
+  const defaultModel =
+    provider === "bailian"
+      ? "qwen-flash"
+      : provider === "deepseek"
+        ? "deepseek-chat"
+        : "gpt-5.4-mini";
+  const providerLabels: Record<ProviderId, string> = {
+    bailian: "阿里云百炼",
+    deepseek: "DeepSeek",
+    openai: "OpenAI",
+    custom: "兼容接口",
+  };
+
+  return {
+    apiKey,
+    baseURL: process.env.AI_BASE_URL?.trim() || defaultBaseURL,
+    configured: Boolean(apiKey),
+    model: process.env.AI_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || defaultModel,
+    provider,
+    providerLabel: providerLabels[provider],
+  };
+}
 
 export function getDirectorConfig() {
+  const config = resolveDirectorConfig();
   return {
-    configured: Boolean(process.env.OPENAI_API_KEY),
-    model: process.env.OPENAI_MODEL?.trim() || "gpt-5.4-mini",
+    configured: config.configured,
+    model: config.model,
+    provider: config.providerLabel,
   };
 }
 
 export async function generateDirectorTurn(request: DirectorRequest) {
-  const config = getDirectorConfig();
+  const config = resolveDirectorConfig();
   if (!config.configured) {
-    throw new Error("OPENAI_API_KEY is not configured");
+    throw new Error("AI_API_KEY is not configured");
   }
 
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const response = await client.responses.parse({
-    model: config.model,
-    instructions: DIRECTOR_INSTRUCTIONS,
-    input: JSON.stringify(
-      {
-        groupState: request.state,
-        latestUserMessage: request.userText,
-      },
-      null,
-      2,
-    ),
-    reasoning: { effort: "low" },
-    text: {
-      format: zodTextFormat(DirectorOutputSchema, "group_interview_replies"),
-      verbosity: "low",
-    },
-    max_output_tokens: 500,
-    prompt_cache_key: "group-lab-director-v1",
-    store: false,
+  const client = new OpenAI({
+    apiKey: config.apiKey,
+    baseURL: config.baseURL,
   });
+  const params: CompatibleChatParams = {
+    model: config.model,
+    messages: [
+      { role: "system", content: DIRECTOR_INSTRUCTIONS },
+      {
+        role: "user",
+        content: JSON.stringify(
+          {
+            groupState: request.state,
+            latestUserMessage: request.userText,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+    response_format: { type: "json_object" },
+    ...(config.provider === "openai"
+      ? { max_completion_tokens: 500 }
+      : { max_tokens: 500 }),
+    ...(config.provider === "bailian" ? { enable_thinking: false } : {}),
+  };
+  const response = await client.chat.completions.create(params);
+  const content = response.choices[0]?.message.content;
 
-  if (!response.output_parsed) {
+  if (!content) {
     throw new Error("The director returned no structured output");
   }
 
+  const normalized = content
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/\s*```$/, "");
+  const parsed = DirectorOutputSchema.safeParse(JSON.parse(normalized));
+  if (!parsed.success) {
+    throw new Error("The director returned an invalid response shape");
+  }
+
   return {
-    replies: response.output_parsed.replies,
+    replies: parsed.data.replies,
     model: config.model,
+    provider: config.providerLabel,
   };
 }

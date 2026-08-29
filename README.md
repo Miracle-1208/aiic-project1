@@ -19,8 +19,8 @@
 
 系统使用一个统一的“群面导演”协调三名候选人，而不是让三个对话请求互相争抢上下文：
 
-- OpenAI Responses API 根据案例、团队状态和历史对话生成 1-2 条动态回应；
-- Structured Outputs 保证返回的候选人和发言结构可被前端稳定消费；
+- 兼容 OpenAI 格式的模型接口根据案例、团队状态和历史对话生成 1-2 条动态回应；
+- JSON Mode 与 Zod 校验保证候选人和发言结构可被前端稳定消费；
 - 本地状态机继续负责行为识别、共识度、共享面板与评分证据；
 - 模型失败、超时或未配置密钥时自动使用确定性回应；
 - API Key 只存在于服务端环境变量，不发送到浏览器。
@@ -57,7 +57,7 @@ npm run dev
 
 打开 [http://localhost:3000](http://localhost:3000)。
 
-### 启用实时 AI
+### 启用实时 AI（推荐：阿里云百炼）
 
 复制环境变量示例：
 
@@ -68,11 +68,15 @@ Copy-Item .env.example .env.local
 然后在 `.env.local` 中填写：
 
 ```dotenv
-OPENAI_API_KEY=你的_OpenAI_API_Key
-OPENAI_MODEL=gpt-5.4-mini
+AI_PROVIDER=bailian
+AI_API_KEY=你的百炼_API_Key
+AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AI_MODEL=qwen-flash
 ```
 
 重新运行 `npm run dev`。页面右上角显示“实时 AI”即代表接入成功。不要把真实密钥提交到 GitHub，也不要粘贴到前端代码中。
+
+也可以将 `AI_PROVIDER`、`AI_BASE_URL` 和 `AI_MODEL` 改为 DeepSeek、OpenAI 或其他兼容接口；旧的 `OPENAI_API_KEY` 与 `OPENAI_MODEL` 配置仍然兼容。
 
 ## 验证
 
@@ -90,7 +94,7 @@ src/
     api/director/      服务端大模型导演接口
   components/          群面流程、讨论房间与报告 UI
   lib/
-    director.ts        OpenAI 结构化输出与导演提示词
+    director.ts        多模型兼容层、JSON 校验与导演提示词
     scenario.ts        案例、方案和候选人设定
     engine.ts          意图识别与群体状态机
     scoring.ts         五维报告生成
@@ -120,4 +124,4 @@ src/
 
 ## 隐私
 
-当前案例不要求上传简历或真实个人信息。测试和演示请继续使用假名与脱敏数据。模型请求设置为 `store: false`，任何 API Key 都只应通过服务端环境变量配置。
+当前案例不要求上传简历或真实个人信息。测试和演示请继续使用假名与脱敏数据。任何 API Key 都只应通过服务端环境变量配置；启用模型后，对话内容会发送给你所选择的模型服务商处理。
