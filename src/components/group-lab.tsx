@@ -29,13 +29,50 @@ import {
 } from "@/lib/engine";
 import { participants, scenario } from "@/lib/scenario";
 import { buildReport } from "@/lib/scoring";
-import type { GroupState, Message, Participant, View } from "@/lib/types";
+import type {
+  DirectorReply,
+  GroupState,
+  Message,
+  Participant,
+  View,
+} from "@/lib/types";
 
 const QUICK_ACTIONS = [
   "我们先统一评价标准：用户影响、成本和上线周期。",
   "我想结合两边意见，先修复提醒问题，再用低成本实验验证长期需求。",
   "时间过半了，我们先锁定一个确定性最高的方案。",
 ];
+
+type DirectorStatus = {
+  mode: "checking" | "live" | "demo";
+  model: string;
+};
+
+function useDirectorStatus(): DirectorStatus {
+  const [status, setStatus] = useState<DirectorStatus>({
+    mode: "checking",
+    model: "gpt-5.4-mini",
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/director", { signal: controller.signal })
+      .then((response) => response.json())
+      .then((data: { configured?: boolean; model?: string }) => {
+        setStatus({
+          mode: data.configured ? "live" : "demo",
+          model: data.model || "gpt-5.4-mini",
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") return;
+        setStatus((current) => ({ ...current, mode: "demo" }));
+      });
+    return () => controller.abort();
+  }, []);
+
+  return status;
+}
 
 function Brand() {
   return (
@@ -57,14 +94,28 @@ function Brand() {
 }
 
 function ShellHeader({ compact = false }: { compact?: boolean }) {
+  const director = useDirectorStatus();
+
   return (
     <header className="relative z-20 mx-auto flex w-full max-w-[1440px] items-center justify-between px-5 py-5 sm:px-8 lg:px-12">
       <Brand />
       <div className="flex items-center gap-3">
         {!compact && (
           <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-2 text-xs font-semibold text-slate-500 shadow-sm backdrop-blur sm:flex">
-            <span className="size-2 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" />
-            演示模式 · 无需 API Key
+            <span
+              className={`size-2 rounded-full ${
+                director.mode === "live"
+                  ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]"
+                  : director.mode === "checking"
+                    ? "animate-pulse bg-indigo-400"
+                    : "bg-amber-400"
+              }`}
+            />
+            {director.mode === "live"
+              ? `实时 AI · ${director.model}`
+              : director.mode === "checking"
+                ? "正在检查 AI 连接"
+                : "演示模式 · 配置 API Key 后启用 AI"}
           </div>
         )}
         <a
@@ -363,6 +414,10 @@ function Room({ state, setState, onFinish }: { state: GroupState; setState: Reac
   const [input, setInput] = useState("");
   const [finalizing, setFinalizing] = useState(false);
   const [statement, setStatement] = useState("");
+  const [isResponding, setIsResponding] = useState(false);
+  const [runtimeMode, setRuntimeMode] = useState<"live" | "demo" | null>(null);
+  const [directorNotice, setDirectorNotice] = useState("");
+  const directorStatus = useDirectorStatus();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -372,15 +427,70 @@ function Room({ state, setState, onFinish }: { state: GroupState; setState: Reac
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [state.messages.length]);
+  }, [isResponding, state.messages.length]);
 
-  const send = () => {
-    if (!input.trim()) return;
-    setState((current) => applyUserTurn(current, input));
+  const send = async () => {
+    const userText = input.trim();
+    if (!userText || isResponding) return;
+
     setInput("");
+    setIsResponding(true);
+    setDirectorNotice("");
+
+    let directorReplies: DirectorReply[] | undefined;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
+
+    try {
+      const response = await fetch("/api/director", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userText,
+          state: {
+            turn: state.turn,
+            timeLeft: state.timeLeft,
+            consensus: state.consensus,
+            criteria: state.criteria,
+            finalists: state.finalists,
+            conflict: state.conflict,
+            messages: state.messages.slice(-16).map((message) => ({
+              speaker: message.speaker,
+              content: message.content,
+            })),
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      const data = (await response.json()) as {
+        code?: string;
+        replies?: DirectorReply[];
+      };
+      if (!response.ok || !data.replies?.length) {
+        throw new Error(data.code || "AI_UNAVAILABLE");
+      }
+
+      directorReplies = data.replies;
+      setRuntimeMode("live");
+    } catch (error) {
+      setRuntimeMode("demo");
+      const isNotConfigured =
+        error instanceof Error && error.message === "AI_NOT_CONFIGURED";
+      setDirectorNotice(
+        isNotConfigured
+          ? "当前未配置 API Key，本轮由演示导演继续。"
+          : "实时 AI 暂时未响应，本轮已自动切换到演示导演。",
+      );
+    } finally {
+      window.clearTimeout(timeout);
+      setState((current) => applyUserTurn(current, userText, directorReplies));
+      setIsResponding(false);
+    }
   };
 
   const currentUserStance = state.finalists.length ? state.finalists.join(" + ") : "尚未形成明确选择";
+  const effectiveDirectorMode = runtimeMode ?? directorStatus.mode;
 
   return (
     <main className="flex min-h-screen flex-col bg-[#f3f5f8]">
@@ -421,8 +531,27 @@ function Room({ state, setState, onFinish }: { state: GroupState; setState: Reac
               <p className="mt-0.5 text-[10px] font-semibold text-slate-400">自由讨论 · 第 {Math.max(1, state.turn)} 轮</p>
             </div>
             <div className="flex items-center gap-3">
-              <div className="hidden items-center gap-2 rounded-full bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-700 sm:flex">
-                <span className="size-2 rounded-full bg-emerald-400" /> 讨论进行中
+              <div
+                className={`hidden items-center gap-2 rounded-full px-3 py-2 text-[10px] font-bold sm:flex ${
+                  effectiveDirectorMode === "live"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-amber-50 text-amber-700"
+                }`}
+              >
+                <span
+                  className={`size-2 rounded-full ${
+                    isResponding
+                      ? "animate-pulse bg-indigo-400"
+                      : effectiveDirectorMode === "live"
+                        ? "bg-emerald-400"
+                        : "bg-amber-400"
+                  }`}
+                />
+                {isResponding
+                  ? "AI 候选人正在回应"
+                  : effectiveDirectorMode === "live"
+                    ? "实时 AI 已连接"
+                    : "演示导演已就绪"}
               </div>
               <div className={`flex items-center gap-2 rounded-full px-3 py-2 text-xs font-black ${state.timeLeft < 120 ? "bg-rose-50 text-rose-600" : "bg-slate-100 text-slate-700"}`}>
                 <Clock3 className="size-3.5" /> {formatTime(state.timeLeft)}
@@ -436,6 +565,16 @@ function Room({ state, setState, onFinish }: { state: GroupState; setState: Reac
                 <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-[10px] font-bold text-slate-400 shadow-sm">AI 候选人已完成个人立场陈述，现在轮到你</span>
               </div>
               {state.messages.map((item) => <MessageBubble key={item.id} item={item} />)}
+              {isResponding && (
+                <div className="flex items-center gap-3" aria-live="polite">
+                  <Avatar participant={participants[3]} size="sm" />
+                  <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-md border border-slate-100 bg-white px-4 py-4 shadow-sm">
+                    <span className="size-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.2s]" />
+                    <span className="size-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.1s]" />
+                    <span className="size-1.5 animate-bounce rounded-full bg-indigo-400" />
+                  </div>
+                </div>
+              )}
               <div ref={bottomRef} />
             </div>
           </div>
@@ -444,7 +583,7 @@ function Room({ state, setState, onFinish }: { state: GroupState; setState: Reac
             <div className="mx-auto max-w-3xl">
               <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
                 {QUICK_ACTIONS.map((action, index) => (
-                  <button key={action} type="button" onClick={() => setInput(action)} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700">
+                  <button key={action} type="button" onClick={() => setInput(action)} disabled={isResponding} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
                     {index === 0 ? "建立标准" : index === 1 ? "整合分歧" : "控制时间"}
                   </button>
                 ))}
@@ -453,23 +592,26 @@ function Room({ state, setState, onFinish }: { state: GroupState; setState: Reac
                 <textarea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
+                  disabled={isResponding}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
-                      send();
+                      void send();
                     }
                   }}
                   rows={2}
                   placeholder="回应团队，提出标准、质疑或整合方案……"
                   className="max-h-28 min-h-12 flex-1 resize-none bg-transparent px-3 py-2 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400"
                 />
-                <button type="button" onClick={send} disabled={!input.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30" aria-label="发送发言">
+                <button type="button" onClick={() => void send()} disabled={isResponding || !input.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30" aria-label="发送发言">
                   <Send className="size-4" />
                 </button>
               </div>
               <div className="mt-2 flex items-center justify-between px-1">
-                <p className="text-[9px] font-semibold text-slate-400">Enter 发送 · Shift + Enter 换行</p>
-                <button type="button" onClick={() => setFinalizing(true)} disabled={state.turn < 2} className="flex items-center gap-1 text-[10px] font-black text-indigo-600 transition hover:text-indigo-800 disabled:cursor-not-allowed disabled:text-slate-300">
+                <p className={`text-[9px] font-semibold ${directorNotice ? "text-amber-600" : "text-slate-400"}`}>
+                  {directorNotice || "Enter 发送 · Shift + Enter 换行"}
+                </p>
+                <button type="button" onClick={() => setFinalizing(true)} disabled={state.turn < 2 || isResponding} className="flex items-center gap-1 text-[10px] font-black text-indigo-600 transition hover:text-indigo-800 disabled:cursor-not-allowed disabled:text-slate-300">
                   进入最终陈述 <ChevronRight className="size-3" />
                 </button>
               </div>

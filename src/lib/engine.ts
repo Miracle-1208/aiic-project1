@@ -1,5 +1,6 @@
 import { openingMessages, scenario } from "./scenario";
 import type {
+  DirectorReply,
   GroupState,
   InfluenceEvent,
   Intent,
@@ -99,7 +100,21 @@ export function classifyIntent(rawText: string): Intent {
     return "integrate";
   }
   if (includesAny(text, ["时间", "还剩", "推进", "收敛", "投票", "节奏"])) return "time";
-  if (includesAny(text, ["标准", "维度", "优先级", "评价", "衡量", "目标是"])) return "criteria";
+  if (
+    includesAny(text, [
+      "标准",
+      "维度",
+      "优先级",
+      "评价",
+      "衡量",
+      "目标是",
+      "依据",
+      "比较",
+      "对比",
+    ])
+  ) {
+    return "criteria";
+  }
   if (includesAny(text, ["不同意", "反对", "但是", "风险", "问题是", "为什么", "质疑"])) {
     return "challenge";
   }
@@ -147,7 +162,7 @@ function unique(items: string[]) {
   return [...new Set(items)];
 }
 
-function directorResponses(intent: Intent, turn: number, text: string): Message[] {
+function fallbackDirectorResponses(intent: Intent, turn: number, text: string): Message[] {
   const optionNames = extractOptions(text);
   const selected = optionNames.join("和") || "这两个方向";
 
@@ -231,6 +246,29 @@ function directorResponses(intent: Intent, turn: number, text: string): Message[
     .map(([speaker, content], index) => message(speaker, content, turn + index / 10, intent));
 }
 
+function directorResponses(
+  intent: Intent,
+  turn: number,
+  text: string,
+  replies?: DirectorReply[],
+): Message[] {
+  const validReplies = replies
+    ?.filter(
+      (reply) =>
+        ["cheng", "lin", "zhou"].includes(reply.speaker) &&
+        reply.content.trim().length > 0,
+    )
+    .slice(0, 2);
+
+  if (!validReplies?.length) {
+    return fallbackDirectorResponses(intent, turn, text);
+  }
+
+  return validReplies.map((reply, index) =>
+    message(reply.speaker, reply.content.trim(), turn + index / 10, intent),
+  );
+}
+
 function eventForIntent(intent: Intent, turn: number): InfluenceEvent {
   const events: Record<Intent, [string, string, InfluenceEvent["tone"]]> = {
     criteria: ["建立共同标准", "你把讨论从个人偏好拉回到一套可共同使用的判断尺度。", "positive"],
@@ -269,14 +307,18 @@ export function createInitialState(): GroupState {
   };
 }
 
-export function applyUserTurn(state: GroupState, rawText: string): GroupState {
+export function applyUserTurn(
+  state: GroupState,
+  rawText: string,
+  directorReplies?: DirectorReply[],
+): GroupState {
   const text = rawText.trim();
   if (!text) return state;
 
   const turn = state.turn + 1;
   const intent = classifyIntent(text);
   const userMessage = message("user", text, turn, intent);
-  const aiMessages = directorResponses(intent, turn, text);
+  const aiMessages = directorResponses(intent, turn, text, directorReplies);
   const criteria = intent === "criteria" ? unique([...state.criteria, ...extractCriteria(text)]) : state.criteria;
   const proposedOptions = extractOptions(text);
   const finalists =

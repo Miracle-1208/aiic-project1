@@ -32,6 +32,28 @@ describe("group interview engine", () => {
     expect(next.influence.at(-1)?.title).toBe("建立共同标准");
   });
 
+  it("uses live director replies while preserving deterministic state updates", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "我建议先按用户影响和上线周期比较。",
+      [
+        {
+          speaker: "zhou",
+          content: "标准可以，但还需要把预算约束放进同一张比较表。",
+        },
+      ],
+    );
+
+    expect(next.messages.at(-1)).toMatchObject({
+      speaker: "zhou",
+      content: "标准可以，但还需要把预算约束放进同一张比较表。",
+    });
+    expect(next.criteria).toEqual(
+      expect.arrayContaining(["用户影响", "实施确定性"]),
+    );
+  });
+
   it("keeps score dimensions within the declared 100-point ceiling", () => {
     let state = createInitialState();
     for (let index = 0; index < 12; index += 1) {

@@ -59,6 +59,11 @@ export interface Message {
   createdAt: string;
 }
 
+export interface DirectorReply {
+  speaker: Exclude<SpeakerId, "user" | "system">;
+  content: string;
+}
+
 export interface InfluenceEvent {
   id: string;
   turn: number;
