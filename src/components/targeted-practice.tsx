@@ -102,6 +102,7 @@ export default function TargetedPractice({
   });
 
   useEffect(() => {
+    unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
       controllerRef.current?.abort();
