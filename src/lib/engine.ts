@@ -1,4 +1,4 @@
-import { openingMessages, scenario } from "./scenario";
+import { getDifficulty, getScenario } from "./scenario";
 import type {
   AssessmentQuality,
   DirectorAssessment,
@@ -10,7 +10,10 @@ import type {
   Message,
   ScoreKey,
   ScoreState,
+  Scenario,
+  ScenarioId,
   SpeakerId,
+  TrainingDifficulty,
   TurnAssessment,
 } from "./types";
 
@@ -116,8 +119,14 @@ function includesAny(text: string, words: string[]) {
   return words.some((word) => text.includes(word));
 }
 
-export function classifyIntent(rawText: string): Intent {
+export function classifyIntent(
+  rawText: string,
+  scenarioId: ScenarioId = "campus-career-retention",
+): Intent {
   const text = rawText.toLowerCase();
+  const optionAliases = Object.values(getScenario(scenarioId).optionAliases)
+    .flat()
+    .map((alias) => alias.toLowerCase());
 
   if (includesAny(text, ["总结", "结论", "最终", "归纳", "代表小组"])) return "summary";
   if (includesAny(text, ["结合", "整合", "兼顾", "共同点", "折中", "吸收", "保留你的"])) {
@@ -142,43 +151,29 @@ export function classifyIntent(rawText: string): Intent {
   if (includesAny(text, ["不同意", "反对", "但是", "风险", "问题是", "为什么", "质疑"])) {
     return "challenge";
   }
-  if (
-    includesAny(text, [
-      "新用户引导",
-      "岗位推荐",
-      "学长咨询",
-      "消息提醒",
-      "企业开放日",
-      "我建议",
-      "我选择",
-      "方案",
-    ])
-  ) {
+  if (includesAny(text, [...optionAliases, "我建议", "我选择", "方案"])) {
     return "proposal";
   }
   if (includesAny(text, ["同意", "赞成", "支持", "认可", "有道理"])) return "support";
   return "general";
 }
 
-function extractCriteria(text: string): string[] {
-  const criteria: string[] = [];
-  if (includesAny(text, ["用户", "留存", "价值", "体验"])) criteria.push("用户影响");
-  if (includesAny(text, ["成本", "预算", "投入", "收益"])) criteria.push("投入产出比");
-  if (includesAny(text, ["时间", "周期", "上线", "落地"])) criteria.push("实施确定性");
-  if (includesAny(text, ["长期", "持续", "未来"])) criteria.push("长期价值");
-  return criteria.length ? criteria : ["用户价值 × 可落地性"];
+function extractCriteria(text: string, selectedScenario: Scenario): string[] {
+  const criteria = selectedScenario.referenceCriteria
+    .filter((criterion) => includesAny(text, criterion.keywords))
+    .map((criterion) => criterion.label);
+  return criteria.length
+    ? criteria
+    : [selectedScenario.referenceCriteria.slice(0, 2).map((item) => item.label).join(" × ")];
 }
 
-function extractOptions(text: string): string[] {
-  const aliases: Record<string, string[]> = {
-    onboarding: ["优化新用户引导", "新用户引导", "新手引导", "注册流程"],
-    recommendation: ["升级岗位推荐", "岗位推荐", "推荐策略"],
-    mentor: ["上线学长咨询", "学长咨询", "学长服务"],
-    notification: ["修复消息提醒", "消息提醒", "提醒故障", "安卓提醒"],
-    "open-day": ["举办企业开放日", "企业开放日", "开放日", "直播宣讲"],
-  };
-  return scenario.options
-    .filter((option) => aliases[option.id].some((alias) => text.includes(alias)))
+function extractOptions(text: string, selectedScenario: Scenario): string[] {
+  return selectedScenario.options
+    .filter((option) =>
+      (selectedScenario.optionAliases[option.id] ?? [option.title]).some((alias) =>
+        text.includes(alias),
+      ),
+    )
     .map((option) => option.title);
 }
 
@@ -186,19 +181,30 @@ function unique(items: string[]) {
   return [...new Set(items)];
 }
 
-function fallbackDirectorResponses(intent: Intent, turn: number, text: string): Message[] {
-  const optionNames = extractOptions(text);
+function fallbackDirectorResponses(
+  intent: Intent,
+  turn: number,
+  text: string,
+  selectedScenario: Scenario,
+  difficulty: TrainingDifficulty,
+): Message[] {
+  const optionNames = extractOptions(text, selectedScenario);
   const selected = optionNames.join("和") || "这两个方向";
+  const coreCriteria = selectedScenario.referenceCriteria
+    .slice(0, 3)
+    .map((criterion) => criterion.label)
+    .join("、");
+  const keyConstraint = selectedScenario.constraints[0];
 
   const responses: Record<Intent, Array<[SpeakerId, string]>> = {
     criteria: [
       [
         "zhou",
-        "这个推进方式我认同。建议把标准压缩成三项：对留存的直接影响、投入产出比、6 周内的实施确定性，然后逐项比较。",
+        `这个推进方式可以。建议把标准压缩为${coreCriteria}，然后让每个方案都接受同一套比较。`,
       ],
       [
         "lin",
-        "可以，我补充一点：除了短期数据，也要看学生是否获得持续回来的理由，否则可能只是把流失往后推。",
+        "我同意统一标准，但希望保留对长期影响和受影响用户的考虑，不要只看最容易量化的指标。",
       ],
     ],
     proposal: [
@@ -208,13 +214,13 @@ function fallbackDirectorResponses(intent: Intent, turn: number, text: string): 
       ],
       [
         "zhou",
-        "我先保留一半意见。方案本身可以，但需要用预算和上线周期验证；岗位推荐的 8 周周期尤其可能超出限制。",
+        `我先保留一半意见。方案可以，但必须逐项对照限制条件，尤其是“${keyConstraint}”，不能只看方向是否吸引人。`,
       ],
     ],
     challenge: [
       [
         "lin",
-        "这个风险提醒很关键。我愿意调整原来的立场，但希望最终方案里保留一个验证动作，确认我们没有忽略用户真正需要的长期帮助。",
+        "这个风险提醒很关键。我愿意调整原来的立场，但希望最终方案里保留一个验证动作，确认我们没有忽略真正的受影响对象。",
       ],
       [
         "cheng",
@@ -224,11 +230,11 @@ function fallbackDirectorResponses(intent: Intent, turn: number, text: string): 
     integrate: [
       [
         "lin",
-        "这个整合比简单投票更好：先修复明确故障，再用低成本实验验证长期需求。我可以接受不把学长咨询直接作为第一期。",
+        "这个整合比简单投票更好：先处理确定性高的问题，再用验证动作保留另一种观点的价值。",
       ],
       [
         "zhou",
-        "这样基本解决了我对证据不足的担忧。建议最终陈述里把‘快速修复 + 小步验证’说成一组策略，而不是两个孤立功能。",
+        "这样基本解决了我对证据不足的担忧。建议再说清先后顺序、验证节点和什么情况下需要调整。",
       ],
     ],
     time: [
@@ -264,7 +270,14 @@ function fallbackDirectorResponses(intent: Intent, turn: number, text: string): 
     ],
   };
 
-  const count = intent === "support" || intent === "general" ? 1 : turn % 3 === 0 ? 2 : 1;
+  const count =
+    difficulty === "pressure"
+      ? 2
+      : difficulty === "guided" || intent === "support" || intent === "general"
+        ? 1
+        : turn % 3 === 0
+          ? 2
+          : 1;
   return responses[intent]
     .slice(0, count)
     .map(([speaker, content], index) => message(speaker, content, turn + index / 10, intent));
@@ -274,6 +287,8 @@ function directorResponses(
   intent: Intent,
   turn: number,
   text: string,
+  selectedScenario: Scenario,
+  difficulty: TrainingDifficulty,
   replies?: DirectorReply[],
 ): Message[] {
   const validReplies = replies
@@ -285,7 +300,7 @@ function directorResponses(
     .slice(0, 2);
 
   if (!validReplies?.length) {
-    return fallbackDirectorResponses(intent, turn, text);
+    return fallbackDirectorResponses(intent, turn, text, selectedScenario, difficulty);
   }
 
   return validReplies.map((reply, index) =>
@@ -347,7 +362,11 @@ const INTENT_FEEDBACK: Record<
   },
 };
 
-function fallbackAssessment(text: string, intent: Intent): DirectorAssessment {
+function fallbackAssessment(
+  text: string,
+  intent: Intent,
+  selectedScenario: Scenario,
+): DirectorAssessment {
   const feedback = INTENT_FEEDBACK[intent];
   return {
     intent,
@@ -356,15 +375,18 @@ function fallbackAssessment(text: string, intent: Intent): DirectorAssessment {
     impactTitle: feedback.title,
     impactDetail: feedback.detail,
     suggestion: feedback.suggestion,
-    criteriaAdded: intent === "criteria" ? extractCriteria(text) : [],
-    finalistsAdded: extractOptions(text),
+    criteriaAdded: intent === "criteria" ? extractCriteria(text, selectedScenario) : [],
+    finalistsAdded: extractOptions(text, selectedScenario),
     unresolvedConflict: "",
     consensusDelta: CONSENSUS_DELTA[intent],
     scoreDeltas: completeScoreDelta(SCORE_DELTA[intent]),
   };
 }
 
-function fallbackFinalAssessment(statement: string): DirectorAssessment {
+function fallbackFinalAssessment(
+  statement: string,
+  selectedScenario: Scenario,
+): DirectorAssessment {
   const includesRisk = includesAny(statement, ["风险", "验证", "控制", "避免"]);
   return {
     intent: "summary",
@@ -377,8 +399,8 @@ function fallbackFinalAssessment(statement: string): DirectorAssessment {
     suggestion: includesRisk
       ? "下一轮继续压缩表达，用一句话先交付结论。"
       : "在结尾补充一个主要风险和对应的验证动作。",
-    criteriaAdded: extractCriteria(statement),
-    finalistsAdded: extractOptions(statement),
+    criteriaAdded: extractCriteria(statement, selectedScenario),
+    finalistsAdded: extractOptions(statement, selectedScenario),
     unresolvedConflict: "",
     consensusDelta: includesRisk ? 12 : 7,
     scoreDeltas: {
@@ -395,10 +417,13 @@ function materializeAssessment(
   text: string,
   turn: number,
   fallback: DirectorAssessment,
+  selectedScenario: Scenario,
+  difficulty: TrainingDifficulty,
   supplied?: DirectorAssessment,
 ): TurnAssessment {
   const assessment = supplied ?? fallback;
-  const allowedOptions = new Set(scenario.options.map((option) => option.title));
+  const allowedOptions = new Set(selectedScenario.options.map((option) => option.title));
+  const difficultyProfile = getDifficulty(difficulty);
   const source = supplied ? "ai" : "fallback";
   const evidence = text.includes(assessment.evidence.trim())
     ? assessment.evidence.trim()
@@ -426,7 +451,11 @@ function materializeAssessment(
   const consensusFloor = assessment.quality === "strong" ? strongConsensusFloor[assessment.intent] : -4;
   const scoreDeltas = (Object.keys(fallback.scoreDeltas) as ScoreKey[]).reduce<ScoreState>(
     (next, key) => {
-      next[key] = clamp(Number(assessment.scoreDeltas[key]) || 0, 0, 6);
+      next[key] = clamp(
+        Math.round((Number(assessment.scoreDeltas[key]) || 0) * difficultyProfile.scoreMultiplier),
+        0,
+        6,
+      );
       return next;
     },
     { ...fallback.scoreDeltas },
@@ -453,7 +482,10 @@ function materializeAssessment(
     ).slice(0, 3),
     unresolvedConflict: assessment.unresolvedConflict.trim().slice(0, 120),
     consensusDelta: clamp(
-      Math.max(Number(assessment.consensusDelta) || 0, consensusFloor),
+      Math.round(
+        Math.max(Number(assessment.consensusDelta) || 0, consensusFloor) *
+          difficultyProfile.consensusMultiplier,
+      ),
       -4,
       18,
     ),
@@ -479,15 +511,27 @@ function eventFromAssessment(assessment: TurnAssessment): InfluenceEvent {
   );
 }
 
-export function createInitialState(): GroupState {
+export function createInitialState(
+  scenarioId: ScenarioId = "campus-career-retention",
+  difficulty: TrainingDifficulty = "standard",
+): GroupState {
+  const selectedScenario = getScenario(scenarioId);
+  const difficultyProfile = getDifficulty(difficulty);
   return {
+    scenarioId: selectedScenario.id,
+    difficulty: difficultyProfile.id,
     turn: 0,
-    timeLeft: 8 * 60,
-    consensus: 28,
+    timeLeft:
+      Math.round((selectedScenario.timeLimit * difficultyProfile.timeMultiplier) / 30) * 30,
+    consensus: clamp(
+      selectedScenario.initialConsensus + difficultyProfile.initialConsensusDelta,
+      8,
+      50,
+    ),
     criteria: [],
     finalists: [],
-    conflict: "短期修复，还是长期用户价值？",
-    messages: openingMessages.map((item, index) =>
+    conflict: selectedScenario.initialConflict,
+    messages: selectedScenario.openingMessages.map((item, index) =>
       message(item.speaker, item.content, 0 + index / 10),
     ),
     influence: [],
@@ -511,30 +555,55 @@ export function applyUserTurn(
   const text = rawText.trim();
   if (!text) return state;
 
+  const scenarioId = state.scenarioId ?? "campus-career-retention";
+  const difficulty = state.difficulty ?? "standard";
+  const selectedScenario = getScenario(scenarioId);
   const turn = state.turn + 1;
-  const fallback = fallbackAssessment(text, classifyIntent(text));
-  const assessment = materializeAssessment(text, turn, fallback, directorTurn?.assessment);
+  const fallback = fallbackAssessment(
+    text,
+    classifyIntent(text, scenarioId),
+    selectedScenario,
+  );
+  const assessment = materializeAssessment(
+    text,
+    turn,
+    fallback,
+    selectedScenario,
+    difficulty,
+    directorTurn?.assessment,
+  );
   const intent = assessment.intent;
   const userMessage = message("user", text, turn, intent);
-  const aiMessages = directorResponses(intent, turn, text, directorTurn?.replies);
-  const inferredCriteria = intent === "criteria" ? extractCriteria(text) : [];
+  const aiMessages = directorResponses(
+    intent,
+    turn,
+    text,
+    selectedScenario,
+    difficulty,
+    directorTurn?.replies,
+  );
+  const inferredCriteria =
+    intent === "criteria" ? extractCriteria(text, selectedScenario) : [];
   const criteria = unique([
     ...state.criteria,
     ...inferredCriteria,
     ...assessment.criteriaAdded,
   ]).slice(-8);
-  const proposedOptions = unique([...extractOptions(text), ...assessment.finalistsAdded]);
+  const proposedOptions = unique([
+    ...extractOptions(text, selectedScenario),
+    ...assessment.finalistsAdded,
+  ]);
   const finalists =
     proposedOptions.length > 0
       ? unique([...state.finalists, ...proposedOptions]).slice(-3)
       : intent === "integrate" && state.finalists.length === 0
-        ? ["修复消息提醒", "优化新用户引导"]
+        ? [...selectedScenario.fallbackFinalists]
         : state.finalists;
 
   const conflict = assessment.unresolvedConflict
     ? assessment.unresolvedConflict
     : intent === "integrate" || intent === "summary"
-      ? "如何同时兼顾快速修复与长期验证？"
+      ? "如何在限制条件内兼顾当前两种核心主张？"
       : intent === "challenge"
         ? "新提出的风险是否会改变当前选择？"
         : state.conflict;
@@ -561,17 +630,22 @@ export function finishSession(
   const statement = rawStatement.trim();
   if (!statement) return state;
 
+  const scenarioId = state.scenarioId ?? "campus-career-retention";
+  const difficulty = state.difficulty ?? "standard";
+  const selectedScenario = getScenario(scenarioId);
   const turn = state.turn + 1;
   const assessment = materializeAssessment(
     statement,
     turn,
-    fallbackFinalAssessment(statement),
+    fallbackFinalAssessment(statement, selectedScenario),
+    selectedScenario,
+    difficulty,
     directorTurn?.assessment,
   );
 
   const finalOptions = unique([
     ...state.finalists,
-    ...extractOptions(statement),
+    ...extractOptions(statement, selectedScenario),
     ...assessment.finalistsAdded,
   ]);
 
@@ -584,7 +658,7 @@ export function finishSession(
     finalists:
       finalOptions.length >= 2
         ? finalOptions.slice(0, 2)
-        : unique([...finalOptions, "修复消息提醒", "优化新用户引导"]).slice(0, 2),
+        : unique([...finalOptions, ...selectedScenario.fallbackFinalists]).slice(0, 2),
     messages: [
       ...state.messages,
       message("user", statement, turn, assessment.intent),

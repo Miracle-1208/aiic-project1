@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import CaseLibrary from "@/components/case-library";
 import {
   applyUserTurn,
   createInitialState,
@@ -27,21 +28,23 @@ import {
   formatTime,
   tick,
 } from "@/lib/engine";
-import { participants, scenario } from "@/lib/scenario";
+import {
+  getDifficulty,
+  getParticipantsForScenario,
+  getScenario,
+  participants,
+} from "@/lib/scenario";
 import { buildReport } from "@/lib/scoring";
 import type {
   DirectorTurn,
   GroupState,
   Message,
   Participant,
+  Scenario,
+  ScenarioId,
+  TrainingDifficulty,
   View,
 } from "@/lib/types";
-
-const QUICK_ACTIONS = [
-  "我们先统一评价标准：用户影响、成本和上线周期。",
-  "我想结合两边意见，先修复提醒问题，再用低成本实验验证长期需求。",
-  "时间过半了，我们先锁定一个确定性最高的方案。",
-];
 
 type DirectorStatus = {
   mode: "checking" | "live" | "demo";
@@ -87,6 +90,8 @@ async function requestDirectorTurn(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      scenarioId: state.scenarioId ?? "campus-career-retention",
+      difficulty: state.difficulty ?? "standard",
       phase,
       userText,
       state: {
@@ -212,7 +217,7 @@ function Welcome({ onStart }: { onStart: () => void }) {
               onClick={onStart}
               className="group inline-flex h-14 items-center justify-center gap-3 rounded-2xl bg-[#111827] px-7 text-sm font-bold text-white shadow-xl shadow-slate-950/15 transition hover:-translate-y-0.5 hover:bg-indigo-600"
             >
-              开始 8 分钟群面
+              进入群面案例库
               <ArrowRight className="size-4 transition group-hover:translate-x-1" />
             </button>
             <div className="flex items-center justify-center gap-4 px-3 text-xs font-semibold text-slate-500 sm:justify-start">
@@ -306,24 +311,38 @@ function PreviewMessage({ participant, text, user = false }: { participant: Part
   );
 }
 
-function Briefing({ onBack, onEnter }: { onBack: () => void; onEnter: () => void }) {
+function Briefing({
+  selectedScenario,
+  difficulty,
+  team,
+  onBack,
+  onEnter,
+}: {
+  selectedScenario: Scenario;
+  difficulty: TrainingDifficulty;
+  team: Participant[];
+  onBack: () => void;
+  onEnter: () => void;
+}) {
+  const difficultyProfile = getDifficulty(difficulty);
   return (
     <main className="min-h-screen bg-[#f6f7fb]">
       <ShellHeader />
       <section className="mx-auto max-w-[1220px] px-5 pb-16 pt-5 sm:px-8 lg:px-12">
         <button type="button" onClick={onBack} className="mb-6 text-xs font-bold text-slate-500 transition hover:text-slate-950">
-          ← 返回首页
+          ← 返回案例库
         </button>
         <div className="overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-sm">
           <div className="bg-[#111827] px-6 py-7 text-white sm:px-9 sm:py-9">
             <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-indigo-200">
-              <span className="rounded-full bg-white/10 px-3 py-1.5">CASE 01</span>
-              <span>{scenario.company}</span>
+              <span className="rounded-full bg-white/10 px-3 py-1.5">{selectedScenario.caseNumber}</span>
+              <span className="rounded-full bg-indigo-400/15 px-3 py-1.5">{difficultyProfile.label}</span>
+              <span>{selectedScenario.company}</span>
             </div>
-            <h1 className="mt-5 text-3xl font-black tracking-[-0.04em] sm:text-4xl">{scenario.title}</h1>
-            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">{scenario.brief}</p>
+            <h1 className="mt-5 text-3xl font-black tracking-[-0.04em] sm:text-4xl">{selectedScenario.title}</h1>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">{selectedScenario.brief}</p>
             <div className="mt-7 grid gap-3 sm:grid-cols-3">
-              {scenario.facts.map((fact) => (
+              {selectedScenario.facts.map((fact) => (
                 <div key={fact.label} className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
                   <p className="text-[11px] font-bold text-slate-400">{fact.label}</p>
                   <p className="mt-1 text-xl font-black tracking-[-0.03em]">{fact.value}</p>
@@ -338,11 +357,11 @@ function Briefing({ onBack, onEnter }: { onBack: () => void; onEnter: () => void
                 <Target className="size-5 text-indigo-600" />
                 <h2 className="text-lg font-black text-slate-950">讨论任务</h2>
               </div>
-              <p className="mt-3 rounded-2xl bg-indigo-50 p-4 text-sm font-semibold leading-7 text-indigo-950">{scenario.goal}</p>
+              <p className="mt-3 rounded-2xl bg-indigo-50 p-4 text-sm font-semibold leading-7 text-indigo-950">{selectedScenario.goal}</p>
 
               <h2 className="mt-8 text-lg font-black text-slate-950">候选方案</h2>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {scenario.options.map((option, index) => (
+                {selectedScenario.options.map((option, index) => (
                   <article key={option.id} className="rounded-2xl border border-slate-200 p-4 transition hover:border-indigo-200 hover:bg-indigo-50/30">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex gap-3">
@@ -367,7 +386,7 @@ function Briefing({ onBack, onEnter }: { onBack: () => void; onEnter: () => void
               <div className="sticky top-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
                 <p className="text-xs font-black tracking-[0.12em] text-slate-400">YOUR TEAM</p>
                 <div className="mt-4 space-y-3">
-                  {participants.map((participant) => (
+                  {team.map((participant) => (
                     <div key={participant.id} className="flex items-center gap-3 rounded-2xl bg-white p-3 shadow-sm">
                       <Avatar participant={participant} />
                       <div className="min-w-0 flex-1">
@@ -384,7 +403,7 @@ function Briefing({ onBack, onEnter }: { onBack: () => void; onEnter: () => void
                 <div className="mt-5 rounded-2xl bg-white p-4">
                   <p className="text-xs font-black text-slate-900">本轮限制</p>
                   <ul className="mt-3 space-y-2">
-                    {scenario.constraints.map((constraint) => (
+                    {selectedScenario.constraints.map((constraint) => (
                       <li key={constraint} className="flex gap-2 text-[11px] leading-5 text-slate-500">
                         <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-500" /> {constraint}
                       </li>
@@ -393,7 +412,7 @@ function Briefing({ onBack, onEnter }: { onBack: () => void; onEnter: () => void
                 </div>
 
                 <button type="button" onClick={onEnter} className="group mt-5 flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 text-sm font-black text-white shadow-lg shadow-indigo-600/20 transition hover:-translate-y-0.5 hover:bg-indigo-700">
-                  进入群面房间 <ArrowRight className="size-4 transition group-hover:translate-x-1" />
+                  进入群面房间 · {difficultyProfile.shortLabel} <ArrowRight className="size-4 transition group-hover:translate-x-1" />
                 </button>
               </div>
             </aside>
@@ -404,7 +423,7 @@ function Briefing({ onBack, onEnter }: { onBack: () => void; onEnter: () => void
   );
 }
 
-function MessageBubble({ item }: { item: Message }) {
+function MessageBubble({ item, team }: { item: Message; team: Participant[] }) {
   if (item.speaker === "system") {
     return (
       <div className="my-5 flex justify-center">
@@ -412,7 +431,7 @@ function MessageBubble({ item }: { item: Message }) {
       </div>
     );
   }
-  const participant = participants.find((person) => person.id === item.speaker) ?? participants[0];
+  const participant = team.find((person) => person.id === item.speaker) ?? team[0];
   const isUser = item.speaker === "user";
   return (
     <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -465,6 +484,9 @@ function Room({
   const [directorNotice, setDirectorNotice] = useState("");
   const directorStatus = useDirectorStatus();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const selectedScenario = getScenario(state.scenarioId);
+  const difficultyProfile = getDifficulty(state.difficulty);
+  const team = getParticipantsForScenario(selectedScenario.id);
 
   useEffect(() => {
     const timer = window.setInterval(() => setState((current) => tick(current)), 1000);
@@ -552,7 +574,7 @@ function Room({
         <aside className="hidden border-r border-slate-200 bg-white p-5 lg:block">
           <p className="text-[10px] font-black tracking-[0.16em] text-slate-400">PARTICIPANTS · 4</p>
           <div className="mt-4 space-y-3">
-            {participants.map((participant) => (
+            {team.map((participant) => (
               <div key={participant.id} className="rounded-2xl border border-slate-100 p-3">
                 <div className="flex items-center gap-3">
                   <div className="relative">
@@ -571,15 +593,15 @@ function Room({
           </div>
           <div className="mt-5 rounded-2xl bg-slate-950 p-4 text-white">
             <p className="text-[10px] font-bold text-slate-400">你的任务</p>
-            <p className="mt-2 text-xs font-semibold leading-5">选出 2 个方案，并帮助团队形成一套共同理由。</p>
+            <p className="mt-2 text-xs font-semibold leading-5">选出 {selectedScenario.selectionCount} 个方案，并帮助团队形成一套共同理由。</p>
           </div>
         </aside>
 
         <section className="flex min-h-[calc(100vh-81px)] min-w-0 flex-col bg-[#f7f8fa]">
           <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
             <div>
-              <p className="text-sm font-black text-slate-950">{scenario.title}</p>
-              <p className="mt-0.5 text-[10px] font-semibold text-slate-400">自由讨论 · 第 {Math.max(1, state.turn)} 轮</p>
+              <p className="text-sm font-black text-slate-950">{selectedScenario.title}</p>
+              <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{difficultyProfile.label} · 第 {Math.max(1, state.turn)} 轮</p>
             </div>
             <div className="flex items-center gap-3">
               <div
@@ -615,10 +637,10 @@ function Room({
               <div className="flex justify-center">
                 <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-[10px] font-bold text-slate-400 shadow-sm">AI 候选人已完成个人立场陈述，现在轮到你</span>
               </div>
-              {state.messages.map((item) => <MessageBubble key={item.id} item={item} />)}
+              {state.messages.map((item) => <MessageBubble key={item.id} item={item} team={team} />)}
               {isResponding && (
                 <div className="flex items-center gap-3" aria-live="polite">
-                  <Avatar participant={participants[3]} size="sm" />
+                  <Avatar participant={team[3]} size="sm" />
                   <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-md border border-slate-100 bg-white px-4 py-4 shadow-sm">
                     <span className="size-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.2s]" />
                     <span className="size-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.1s]" />
@@ -633,7 +655,7 @@ function Room({
           <div className="border-t border-slate-200 bg-white p-3 sm:p-4">
             <div className="mx-auto max-w-3xl">
               <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-                {QUICK_ACTIONS.map((action, index) => (
+                {selectedScenario.quickActions.map((action, index) => (
                   <button key={action} type="button" onClick={() => setInput(action)} disabled={isResponding} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
                     {index === 0 ? "建立标准" : index === 1 ? "整合分歧" : "控制时间"}
                   </button>
@@ -750,8 +772,18 @@ function BoardBlock({ icon, title, items, empty }: { icon: React.ReactNode; titl
   );
 }
 
-function Report({ state, onRestart }: { state: GroupState; onRestart: () => void }) {
+function Report({
+  state,
+  onRestart,
+  onLibrary,
+}: {
+  state: GroupState;
+  onRestart: () => void;
+  onLibrary: () => void;
+}) {
   const report = useMemo(() => buildReport(state), [state]);
+  const selectedScenario = getScenario(state.scenarioId);
+  const difficultyProfile = getDifficulty(state.difficulty);
   return (
     <main className="min-h-screen bg-[#f5f7fa]">
       <ShellHeader />
@@ -760,6 +792,7 @@ function Report({ state, onRestart }: { state: GroupState; onRestart: () => void
           <div className="grid gap-8 p-7 sm:p-10 lg:grid-cols-[310px_1fr] lg:p-12">
             <div>
               <div className="flex items-center gap-2 text-xs font-black tracking-[0.12em] text-indigo-300"><Sparkles className="size-4" /> EVIDENCE REPORT</div>
+              <p className="mt-3 text-xs font-semibold leading-5 text-slate-400">{selectedScenario.title} · {difficultyProfile.label}</p>
               <div className="mt-6 flex items-end gap-3">
                 <span className="text-7xl font-black tracking-[-0.07em]">{report.total}</span>
                 <span className="mb-2 text-sm font-bold text-slate-400">/ 100</span>
@@ -837,9 +870,14 @@ function Report({ state, onRestart }: { state: GroupState; onRestart: () => void
               </div>
               <p className="mt-5 line-clamp-4 text-xs leading-6 text-slate-500">“{state.finalStatement}”</p>
             </section>
-            <button type="button" onClick={onRestart} className="flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition hover:bg-indigo-600">
-              <RotateCcw className="size-4" /> 重新训练
-            </button>
+            <div className="grid grid-cols-2 gap-3">
+              <button type="button" onClick={onLibrary} className="flex h-13 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-black text-slate-600 transition hover:border-indigo-200 hover:text-indigo-700">
+                返回题库
+              </button>
+              <button type="button" onClick={onRestart} className="flex h-13 items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition hover:bg-indigo-600">
+                <RotateCcw className="size-4" /> 再练一次
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -849,14 +887,30 @@ function Report({ state, onRestart }: { state: GroupState; onRestart: () => void
 
 export default function GroupLab() {
   const [view, setView] = useState<View>("welcome");
-  const [state, setState] = useState<GroupState>(() => createInitialState());
+  const [difficulty, setDifficulty] = useState<TrainingDifficulty>("standard");
+  const [selectedScenarioId, setSelectedScenarioId] = useState<ScenarioId>(
+    "campus-career-retention",
+  );
+  const [state, setState] = useState<GroupState>(() =>
+    createInitialState("campus-career-retention", "standard"),
+  );
+  const selectedScenario = getScenario(selectedScenarioId);
+  const team = getParticipantsForScenario(selectedScenarioId);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
   }, [view]);
 
   const restart = () => {
-    setState(createInitialState());
+    setSelectedScenarioId(state.scenarioId);
+    setDifficulty(state.difficulty);
+    setState(createInitialState(state.scenarioId, state.difficulty));
+    setView("briefing");
+  };
+
+  const selectScenario = (scenarioId: ScenarioId) => {
+    setSelectedScenarioId(scenarioId);
+    setState(createInitialState(scenarioId, difficulty));
     setView("briefing");
   };
 
@@ -866,8 +920,36 @@ export default function GroupLab() {
     setView("report");
   };
 
-  if (view === "welcome") return <Welcome onStart={() => setView("briefing")} />;
-  if (view === "briefing") return <Briefing onBack={() => setView("welcome")} onEnter={() => setView("room")} />;
-  if (view === "report") return <Report state={state} onRestart={restart} />;
+  if (view === "welcome") return <Welcome onStart={() => setView("library")} />;
+  if (view === "library") {
+    return (
+      <CaseLibrary
+        difficulty={difficulty}
+        onDifficultyChange={setDifficulty}
+        onSelect={selectScenario}
+        onBack={() => setView("welcome")}
+      />
+    );
+  }
+  if (view === "briefing") {
+    return (
+      <Briefing
+        selectedScenario={selectedScenario}
+        difficulty={difficulty}
+        team={team}
+        onBack={() => setView("library")}
+        onEnter={() => setView("room")}
+      />
+    );
+  }
+  if (view === "report") {
+    return (
+      <Report
+        state={state}
+        onRestart={restart}
+        onLibrary={() => setView("library")}
+      />
+    );
+  }
   return <Room state={state} setState={setState} onFinish={complete} />;
 }

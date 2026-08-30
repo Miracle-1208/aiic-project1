@@ -1,4 +1,11 @@
-export type View = "welcome" | "briefing" | "room" | "report";
+export type View = "welcome" | "library" | "briefing" | "room" | "report";
+
+export type ScenarioId =
+  | "campus-career-retention"
+  | "coffee-safety-crisis"
+  | "ai-study-beta";
+
+export type TrainingDifficulty = "guided" | "standard" | "pressure";
 
 export type SpeakerId = "user" | "cheng" | "lin" | "zhou" | "system";
 
@@ -44,14 +51,42 @@ export interface CaseOption {
 }
 
 export interface Scenario {
-  id: string;
+  id: ScenarioId;
+  category: string;
+  caseNumber: string;
+  accent: string;
   title: string;
   company: string;
   brief: string;
   goal: string;
+  timeLimit: number;
+  selectionCount: number;
+  initialConsensus: number;
+  initialConflict: string;
   constraints: string[];
   facts: Array<{ label: string; value: string }>;
   options: CaseOption[];
+  referenceCriteria: Array<{ label: string; keywords: string[] }>;
+  optionAliases: Record<string, string[]>;
+  participantStances: Record<Exclude<SpeakerId, "user" | "system">, string>;
+  openingMessages: Array<{
+    speaker: Exclude<SpeakerId, "user" | "system">;
+    content: string;
+  }>;
+  quickActions: [string, string, string];
+  fallbackFinalists: [string, string];
+}
+
+export interface DifficultyProfile {
+  id: TrainingDifficulty;
+  label: string;
+  shortLabel: string;
+  description: string;
+  behavior: string;
+  consensusMultiplier: number;
+  scoreMultiplier: number;
+  timeMultiplier: number;
+  initialConsensusDelta: number;
 }
 
 export interface Message {
@@ -105,6 +140,8 @@ export interface InfluenceEvent {
 }
 
 export interface GroupState {
+  scenarioId: ScenarioId;
+  difficulty: TrainingDifficulty;
   turn: number;
   timeLeft: number;
   consensus: number;

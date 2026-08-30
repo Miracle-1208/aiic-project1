@@ -101,6 +101,74 @@ describe("group interview engine", () => {
     );
   });
 
+  it("creates independent case state for every scenario and difficulty", () => {
+    const guided = createInitialState("coffee-safety-crisis", "guided");
+    const pressure = createInitialState("coffee-safety-crisis", "pressure");
+
+    expect(guided.scenarioId).toBe("coffee-safety-crisis");
+    expect(guided.messages[0].content).toContain("12 家涉事门店");
+    expect(guided.conflict).toContain("公开回应消费者");
+    expect(guided.timeLeft).toBeGreaterThan(pressure.timeLeft);
+    expect(guided.consensus).toBeGreaterThan(pressure.consensus);
+  });
+
+  it("extracts finalists from the selected case instead of the default case", () => {
+    const initial = createInitialState("ai-study-beta", "standard");
+    const next = applyUserTurn(
+      initial,
+      "我建议首版先做个性化学习计划和错题诊断，形成可以验证学习效果的闭环。",
+    );
+
+    expect(next.finalists).toEqual(
+      expect.arrayContaining(["个性化学习计划", "错题诊断与知识图谱"]),
+    );
+    expect(next.finalists).not.toContain("修复消息提醒");
+  });
+
+  it("makes high-pressure scoring and consensus growth stricter", () => {
+    const userText = "我想兼顾两边意见，先公开说明，同时保留第三方检测。";
+    const directorTurn = {
+      replies: [
+        {
+          speaker: "zhou" as const,
+          content: "可以，但还需要说明两个动作的先后顺序和判断节点。",
+        },
+      ],
+      assessment: {
+        intent: "integrate" as const,
+        quality: "strong" as const,
+        evidence: "先公开说明，同时保留第三方检测",
+        impactTitle: "整合应急与验证",
+        impactDetail: "你把即时回应和事实验证放入同一条行动路径。",
+        suggestion: "明确两个行动的先后顺序和调整条件。",
+        criteriaAdded: [],
+        finalistsAdded: ["公开说明并滚动通报", "委托第三方全链路检测"],
+        unresolvedConflict: "两个行动如何衔接？",
+        consensusDelta: 12,
+        scoreDeltas: {
+          contribution: 4,
+          progress: 5,
+          listening: 5,
+          conflict: 4,
+          structure: 3,
+        },
+      },
+    };
+    const guided = createInitialState("coffee-safety-crisis", "guided");
+    const pressure = createInitialState("coffee-safety-crisis", "pressure");
+    const guidedNext = applyUserTurn(guided, userText, directorTurn);
+    const pressureNext = applyUserTurn(pressure, userText, directorTurn);
+    const total = (scores: typeof guided.scores) =>
+      Object.values(scores).reduce((sum, value) => sum + value, 0);
+
+    expect(guidedNext.consensus - guided.consensus).toBeGreaterThan(
+      pressureNext.consensus - pressure.consensus,
+    );
+    expect(total(guidedNext.scores) - total(guided.scores)).toBeGreaterThan(
+      total(pressureNext.scores) - total(pressure.scores),
+    );
+  });
+
   it("keeps AI coaching grounded when it introduces a new numeric commitment", () => {
     const initial = createInitialState();
     const statement =
