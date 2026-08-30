@@ -13,10 +13,102 @@ import type { Scenario } from "./types";
 
 describe("group interview engine", () => {
   it("classifies the collaboration actions that drive the group state", () => {
-    expect(classifyIntent("我们先统一评价标准，再逐项比较")).toBe("criteria");
-    expect(classifyIntent("我想结合两边的意见，保留共同点")).toBe("integrate");
-    expect(classifyIntent("时间不多了，我们应该开始收敛")).toBe("time");
+    expect(classifyIntent("我们先统一评价标准：用户影响、预算和上线周期")).toBe(
+      "criteria",
+    );
+    expect(
+      classifyIntent(
+        "结合程野关注的留存和林乔强调的长期价值，先修复消息提醒，再验证优化新用户引导。",
+      ),
+    ).toBe("integrate");
+    expect(classifyIntent("时间不多了，我们先锁定修复消息提醒并开始收敛")).toBe(
+      "time",
+    );
     expect(classifyIntent("我不同意，现在的方案还有预算风险")).toBe("challenge");
+    expect(classifyIntent("我们结合一下")).toBe("general");
+  });
+
+  it("does not let collaboration keywords move the team without case substance", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(initial, "我们结合一下");
+
+    expect(next.consensus).toBe(initial.consensus);
+    expect(next.criteria).toEqual([]);
+    expect(next.finalists).toEqual([]);
+    expect(next.assessments.at(-1)).toMatchObject({
+      intent: "general",
+      consensusDelta: 0,
+    });
+    expect(next.influence.at(-1)).toMatchObject({
+      evidence: "我们结合一下",
+      consensusDelta: 0,
+    });
+    expect(next.influence.at(-1)?.noProgressReason).toMatch(/程野|林乔|周可/);
+  });
+
+  it("rejects an AI integrate label when its grounded quote is still empty", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(initial, "我们结合一下。", {
+      replies: [{ speaker: "cheng", content: "请先说明要结合哪两种主张。" }],
+      assessment: {
+        intent: "integrate",
+        quality: "strong",
+        evidence: "我们结合一下",
+        impactTitle: "错误整合",
+        impactDetail: "模型错误地把动作词当作团队推进。",
+        suggestion: "补充具体主张。",
+        criteriaAdded: [],
+        finalistsAdded: [],
+        unresolvedConflict: "",
+        consensusDelta: 18,
+        scoreDeltas: {
+          contribution: 6,
+          progress: 6,
+          listening: 6,
+          conflict: 6,
+          structure: 6,
+        },
+      },
+    });
+
+    expect(next.assessments.at(-1)).toMatchObject({
+      source: "fallback",
+      intent: "general",
+      consensusDelta: 0,
+    });
+    expect(next.consensus).toBe(initial.consensus);
+  });
+
+  it("only rewards integration that names real positions and real options", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "结合程野关注的留存和林乔强调的长期价值，先做修复消息提醒，再验证优化新用户引导。",
+    );
+
+    expect(next.assessments.at(-1)?.intent).toBe("integrate");
+    expect(next.consensus).toBeGreaterThan(initial.consensus);
+    expect(next.finalists).toEqual(
+      expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
+    );
+  });
+
+  it("does not invent shared criteria when the user only says the word standard", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(initial, "我们先统一评价标准，再逐项比较。");
+
+    expect(next.criteria).toEqual([]);
+  });
+
+  it("does not silently fill fallback finalists for an option-free integration", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "我们结合短期修复和长期用户价值，先回应当前分歧再决定方案。",
+    );
+
+    expect(next.assessments.at(-1)?.intent).toBe("integrate");
+    expect(next.finalists).toEqual([]);
   });
 
   it("turns a useful user contribution into visible group-state changes", () => {
@@ -128,6 +220,41 @@ describe("group interview engine", () => {
       impactTitle: "建立比较框架",
     });
     expect(next.influence.at(-1)?.suggestion).toBe("补上预算维度并说明三个标准的优先级。");
+  });
+
+  it("accepts AI evidence when only whitespace differs from the user quote", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "我建议先按用户影响和上线周期比较。",
+      {
+        replies: [{ speaker: "zhou", content: "可以，再补上预算约束。" }],
+        assessment: {
+          intent: "criteria",
+          quality: "strong",
+          evidence: "用户影响  和\n上线周期",
+          impactTitle: "建立比较框架",
+          impactDetail: "用户给出了两个可比较维度。",
+          suggestion: "补上预算维度。",
+          criteriaAdded: ["用户影响", "实施确定性"],
+          finalistsAdded: [],
+          unresolvedConflict: "三个标准如何排序？",
+          consensusDelta: 8,
+          scoreDeltas: {
+            contribution: 4,
+            progress: 4,
+            listening: 1,
+            conflict: 0,
+            structure: 4,
+          },
+        },
+      },
+    );
+
+    expect(next.assessments.at(-1)).toMatchObject({
+      source: "ai",
+      evidence: "用户影响和上线周期",
+    });
   });
 
   it("keeps score dimensions within the declared 100-point ceiling", () => {
@@ -328,6 +455,59 @@ describe("group interview engine", () => {
       intent: "criteria",
       impactTitle: "建立共同标准",
     });
+    expect(next.consensus - initial.consensus).toBe(9);
+    expect(next.assessments.at(-1)?.consensusDelta).not.toBe(12);
+  });
+
+  it("keeps empty agreement and unverifiable challenge from gaining consensus", () => {
+    const initial = createInitialState();
+    const support = applyUserTurn(initial, "我同意大家。", {
+      replies: [{ speaker: "cheng", content: "那请说明你同意的具体判断。" }],
+      assessment: {
+        intent: "support",
+        quality: "strong",
+        evidence: "我同意大家",
+        impactTitle: "表达支持",
+        impactDetail: "用户表示同意。",
+        suggestion: "补充具体理由。",
+        criteriaAdded: [],
+        finalistsAdded: [],
+        unresolvedConflict: initial.conflict,
+        consensusDelta: 10,
+        scoreDeltas: {
+          contribution: 3,
+          progress: 3,
+          listening: 4,
+          conflict: 1,
+          structure: 2,
+        },
+      },
+    });
+    const challenge = applyUserTurn(initial, "这个方案我有疑问。", {
+      replies: [{ speaker: "zhou", content: "请说明可以验证的具体风险。" }],
+      assessment: {
+        intent: "challenge",
+        quality: "strong",
+        evidence: "这个方案我有疑问",
+        impactTitle: "提出质疑",
+        impactDetail: "用户提出了疑问。",
+        suggestion: "补充具体风险。",
+        criteriaAdded: [],
+        finalistsAdded: [],
+        unresolvedConflict: initial.conflict,
+        consensusDelta: 10,
+        scoreDeltas: {
+          contribution: 3,
+          progress: 3,
+          listening: 3,
+          conflict: 4,
+          structure: 2,
+        },
+      },
+    });
+
+    expect(support.consensus).toBe(initial.consensus);
+    expect(challenge.consensus).toBeLessThanOrEqual(initial.consensus);
   });
 
   it("formats the interview timer consistently", () => {

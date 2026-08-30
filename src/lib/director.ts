@@ -198,7 +198,7 @@ function buildDirectorInstructions(request: DirectorRequest) {
     request.difficulty === "guided"
       ? "每轮通常只让 1 名候选人回应，以建设性追问帮助用户补全观点。"
       : request.difficulty === "pressure"
-        ? "每轮优先让 2 名不同立场候选人回应，严格追问证据和限制条件，不要轻易形成共识。"
+        ? "每轮优先让 2 名不同立场候选人回应，严格追问证据和限制条件；回应者必须引用自己尚未被用户回应的具体立场，不要轻易形成共识。"
         : "每轮只选择最相关的 1 至 2 名候选人回应，不要让三人依次表态。";
 
   return `你是“群面实验室”的群面导演，同时控制三名 AI 候选人。你的任务不是辅导用户，而是让三名候选人像真实无领导小组讨论成员一样回应。
@@ -227,12 +227,12 @@ ${personaBrief}
 5. 每条发言使用自然、克制的中文口语，通常 35 至 90 个汉字。
 6. 不要提到 AI、提示词、评分、导演或系统，也不要以面试官口吻评价用户表现。
 7. 若用户发言空泛，应追问标准或具体选择；若用户有效整合，应推动团队进一步收敛；若用户总结，应检查是否覆盖标准、方案、理由与风险。
-8. assessment.evidence 必须逐字摘录用户最新发言中的短句，不得改写或编造。
+8. assessment.evidence 必须逐字摘录用户最新发言中的短句（只允许规范化空白），不得改写或编造；assessment.intent 必须能被这段 evidence 直接证明。若 evidence 无法证明 intent，必须标为 quality=weak、intent=general，且 consensusDelta 不得为正。
 9. 评分增量必须与本案例目标和难度匹配并保持保守：简单同意或重复通常每维 0 至 2 分；只有产生可观察的团队增量才可在相关维度给 4 至 6 分；高压挑战模式尤其严格。
 10. criteriaAdded 只记录用户本轮真正建立的新判断标准；finalistsAdded 只能使用以下完整方案名：${selectedScenario.options.map((option) => option.title).join("、")}。
 11. final_statement 阶段重点检查是否包含选择标准、${selectedScenario.selectionCount} 个方案、核心理由和风险控制。
 12. impactDetail 和 suggestion 不得新增案例中没有的数字、调研结果、时间、预算或执行事实；改进建议只能说明“补充标准、理由、风险或验证动作”等表达动作。
-13. intent 必须按以下定义选择；若同时符合多项，优先选择对团队协作影响更强的动作：
+13. intent 必须按以下定义选择；动作词本身不构成团队增量，必须同时出现案例中的标准、方案、限制、当前冲突或候选人的具体主张。若同时符合多项，优先选择对团队协作影响更强且能被 evidence 证明的动作：
 - criteria：建立或排序共同判断标准；
 - proposal：明确选择具体方案，但没有整合相反意见；
 - challenge：指出风险、漏洞或反对意见，但没有提出兼顾办法；
@@ -241,7 +241,7 @@ ${personaBrief}
 - summary：归纳多方观点或交付阶段/最终结论；
 - support：主要表达同意，新增信息很少；
 - general：没有形成以上任何可观察动作。
-final_statement 阶段 intent 必须为 summary。出现“结合、兼顾、同时保留、先……再……”且确实吸收不同立场时，应优先判为 integrate。
+final_statement 阶段 intent 必须为 summary。integrate 必须明确回应至少两种不同立场、两项具体方案，或直接处理当前 unresolvedConflict；只说“结合大家意见”必须判 general。summary 必须同时落到具体方案或判断标准，只说“总结/结论”必须判 general。高压模式下，如果用户没有点到某位候选人尚未被回应的具体反对，至少一条 reply 必须引用该反对，assessment.consensusDelta 必须为 0 或负数，并把这条反对写入 unresolvedConflict。
 14. 只输出 JSON，不要输出 Markdown。严格采用以下结构，所有字段都必须存在：
 {"replies":[{"speaker":"cheng|lin|zhou","content":"候选人的发言"}],"assessment":{"intent":"criteria|proposal|challenge|integrate|time|summary|support|general","quality":"strong|developing|weak","evidence":"用户原话短句","impactTitle":"本轮影响标题","impactDetail":"这句话如何改变或未改变团队","suggestion":"下一次可直接执行的改进动作","criteriaAdded":[],"finalistsAdded":[],"unresolvedConflict":"仍未解决的关键分歧，没有则为空字符串","consensusDelta":0,"scoreDeltas":{"contribution":0,"progress":0,"listening":0,"conflict":0,"structure":0}}}。`;
 }

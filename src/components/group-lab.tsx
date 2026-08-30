@@ -469,6 +469,10 @@ function ConsensusMeter({ value }: { value: number }) {
   );
 }
 
+function signedDelta(value: number) {
+  return value > 0 ? `+${value}` : `${value}`;
+}
+
 function Room({
   state,
   setState,
@@ -621,6 +625,7 @@ function Room({
 
   const currentUserStance = state.finalists.length ? state.finalists.join(" + ") : "尚未形成明确选择";
   const effectiveDirectorMode = runtimeMode ?? directorStatus.mode;
+  const latestInfluence = state.influence.at(-1);
 
   return (
     <main className="flex min-h-screen flex-col bg-[#f3f5f8]">
@@ -815,19 +820,29 @@ function Room({
               <p className="mt-2 text-[11px] font-semibold leading-5 text-amber-900/70">{state.conflict}</p>
             </div>
           </div>
-          {state.influence.length > 0 && (
+          {latestInfluence && (
             <div className="mt-5 rounded-2xl bg-indigo-50 p-4">
               <div className="flex items-center justify-between gap-2 text-xs font-black text-indigo-700">
                 <span className="flex items-center gap-2"><Zap className="size-4" /> 最新影响</span>
                 <span className="rounded-full bg-white px-2 py-1 text-[8px] tracking-[0.08em] text-indigo-500">
-                  {state.influence.at(-1)?.source === "ai" ? "AI 证据" : "本地规则"}
+                  {latestInfluence.source === "ai" ? "AI 证据" : "本地规则"}
                 </span>
               </div>
-              <p className="mt-2 text-[11px] font-bold text-slate-700">{state.influence.at(-1)?.title}</p>
-              <p className="mt-1 text-[10px] leading-5 text-slate-500">{state.influence.at(-1)?.detail}</p>
-              {state.influence.at(-1)?.evidence && (
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="text-[11px] font-bold text-slate-700">{latestInfluence.title}</p>
+                <span className={`shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-black ${(latestInfluence.consensusDelta ?? 0) > 0 ? "text-emerald-600" : (latestInfluence.consensusDelta ?? 0) < 0 ? "text-rose-600" : "text-amber-600"}`}>
+                  共识 Δ {signedDelta(latestInfluence.consensusDelta ?? 0)}
+                </span>
+              </div>
+              <p className="mt-1 text-[10px] leading-5 text-slate-500">{latestInfluence.detail}</p>
+              {latestInfluence.evidence && (
                 <p className="mt-2 border-l-2 border-indigo-200 pl-2 text-[9px] leading-4 text-indigo-700">
-                  “{state.influence.at(-1)?.evidence}”
+                  用户原话：“{latestInfluence.evidence}”
+                </p>
+              )}
+              {latestInfluence.noProgressReason && (
+                <p className="mt-2 rounded-xl bg-amber-100/70 px-3 py-2 text-[9px] font-semibold leading-4 text-amber-800">
+                  未推动：{latestInfluence.noProgressReason}
                 </p>
               )}
             </div>
@@ -982,6 +997,9 @@ function Report({
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-black text-slate-900">{event.title}</p>
                       <span className="text-[9px] font-bold text-slate-400">第 {event.turn} 轮</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[8px] font-black ${(event.consensusDelta ?? 0) > 0 ? "bg-emerald-50 text-emerald-700" : (event.consensusDelta ?? 0) < 0 ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>
+                        共识 Δ {signedDelta(event.consensusDelta ?? 0)}
+                      </span>
                       <span className={`rounded-full px-2 py-0.5 text-[8px] font-black ${event.source === "ai" ? "bg-indigo-50 text-indigo-600" : "bg-slate-100 text-slate-500"}`}>
                         {event.source === "ai" ? "AI 证据" : "本地规则"}
                       </span>
@@ -995,6 +1013,11 @@ function Report({
                     {event.suggestion && (
                       <p className="mt-2 text-[10px] font-semibold leading-5 text-indigo-600">
                         下一步：{event.suggestion}
+                      </p>
+                    )}
+                    {event.noProgressReason && (
+                      <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[10px] font-semibold leading-5 text-amber-800">
+                        未推动：{event.noProgressReason}
                       </p>
                     )}
                     {(state.turnSnapshots ?? []).some(

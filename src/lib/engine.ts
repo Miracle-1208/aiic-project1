@@ -45,9 +45,14 @@ const CONSENSUS_DELTA: Record<Intent, number> = {
   integrate: 15,
   time: 9,
   summary: 18,
-  support: 5,
-  general: 1,
+  support: 0,
+  general: 0,
 };
+
+type IntentContext = Pick<
+  GroupState,
+  "conflict" | "criteria" | "finalists" | "messages"
+>;
 
 function nowLabel() {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -80,6 +85,8 @@ function influence(
   evidence?: string,
   suggestion?: string,
   source?: InfluenceEvent["source"],
+  consensusDelta?: number,
+  noProgressReason?: string,
 ): InfluenceEvent {
   return {
     id: `event-${turn}-${title}`,
@@ -90,6 +97,8 @@ function influence(
     evidence,
     suggestion,
     source,
+    consensusDelta,
+    noProgressReason,
   };
 }
 
@@ -121,64 +130,195 @@ function includesAny(text: string, words: string[]) {
   return words.some((word) => text.includes(word));
 }
 
-export function classifyIntent(
-  rawText: string,
-  scenarioOrId: Scenario | ScenarioId = "campus-career-retention",
-): Intent {
-  const text = rawText.toLowerCase();
-  const selectedScenario =
-    typeof scenarioOrId === "string" ? getScenario(scenarioOrId) : scenarioOrId;
-  const optionAliases = Object.values(selectedScenario.optionAliases)
-    .flat()
-    .map((alias) => alias.toLowerCase());
+function normalizeForMatch(text: string) {
+  return text.toLowerCase().replace(/\s+/g, "");
+}
 
-  if (includesAny(text, ["总结", "结论", "最终", "归纳", "代表小组"])) return "summary";
-  if (includesAny(text, ["结合", "整合", "兼顾", "共同点", "折中", "吸收", "保留你的"])) {
-    return "integrate";
-  }
-  if (includesAny(text, ["时间", "还剩", "推进", "收敛", "投票", "节奏"])) return "time";
-  if (
-    includesAny(text, [
-      "标准",
-      "维度",
-      "优先级",
-      "评价",
-      "衡量",
-      "目标是",
-      "依据",
-      "比较",
-      "对比",
-    ])
-  ) {
-    return "criteria";
-  }
-  if (includesAny(text, ["不同意", "反对", "但是", "风险", "问题是", "为什么", "质疑"])) {
-    return "challenge";
-  }
-  if (includesAny(text, [...optionAliases, "我建议", "我选择", "方案"])) {
-    return "proposal";
-  }
-  if (includesAny(text, ["同意", "赞成", "支持", "认可", "有道理"])) return "support";
-  return "general";
+function includesNormalized(text: string, fragment: string) {
+  const normalizedFragment = normalizeForMatch(fragment);
+  return (
+    normalizedFragment.length > 0 &&
+    normalizeForMatch(text).includes(normalizedFragment)
+  );
 }
 
 function extractCriteria(text: string, selectedScenario: Scenario): string[] {
-  const criteria = selectedScenario.referenceCriteria
-    .filter((criterion) => includesAny(text, criterion.keywords))
+  return selectedScenario.referenceCriteria
+    .filter((criterion) =>
+      criterion.keywords.some((keyword) => includesNormalized(text, keyword)),
+    )
     .map((criterion) => criterion.label);
-  return criteria.length
-    ? criteria
-    : [selectedScenario.referenceCriteria.slice(0, 2).map((item) => item.label).join(" × ")];
 }
 
 function extractOptions(text: string, selectedScenario: Scenario): string[] {
   return selectedScenario.options
     .filter((option) =>
       (selectedScenario.optionAliases[option.id] ?? [option.title]).some((alias) =>
-        text.includes(alias),
+        includesNormalized(text, alias),
       ),
     )
     .map((option) => option.title);
+}
+
+function conflictPhrases(conflict: string) {
+  return conflict
+    .split(/[，,。！？!?；;、]|还是|或者|或是|\bvs\b/gi)
+    .map((item) => item.trim().replace(/^(?:如何|是否|怎样|怎么)/, ""))
+    .filter((item) => normalizeForMatch(item).length >= 4);
+}
+
+function mentionsConflict(text: string, conflict: string) {
+  return conflictPhrases(conflict).some((phrase) => includesNormalized(text, phrase));
+}
+
+function candidatePositionCount(text: string, selectedScenario: Scenario) {
+  const participantNames = [
+    ["cheng", "程野"],
+    ["lin", "林乔"],
+    ["zhou", "周可"],
+  ] as const;
+  const entityTerms = [
+    ...selectedScenario.referenceCriteria.flatMap((criterion) => criterion.keywords),
+    ...Object.values(selectedScenario.optionAliases).flat(),
+  ]
+    .map(normalizeForMatch)
+    .filter((term) => term.length >= 2);
+  const normalizedText = normalizeForMatch(text);
+
+  return participantNames.filter(([, name]) => {
+    const nameIndex = normalizedText.indexOf(name);
+    if (nameIndex < 0) return false;
+    const window = normalizedText.slice(
+      Math.max(0, nameIndex - 12),
+      nameIndex + name.length + 18,
+    );
+    return entityTerms.some((term) => window.includes(term));
+  }).length;
+}
+
+function hasVerifiableRisk(
+  text: string,
+  selectedScenario: Scenario,
+  context?: IntentContext,
+) {
+  return (
+    extractOptions(text, selectedScenario).length > 0 ||
+    extractCriteria(text, selectedScenario).length > 0 ||
+    mentionsConflict(text, context?.conflict ?? selectedScenario.initialConflict)
+  );
+}
+
+function intentSignals(
+  rawText: string,
+  selectedScenario: Scenario,
+  context?: IntentContext,
+) {
+  const text = rawText.toLowerCase();
+  const options = extractOptions(text, selectedScenario);
+  const criteria = extractCriteria(text, selectedScenario);
+  const conflict = context?.conflict ?? selectedScenario.initialConflict;
+  const conflictMentioned = mentionsConflict(text, conflict);
+  const positionCount = candidatePositionCount(text, selectedScenario);
+  const hasCaseEntity =
+    options.length > 0 ||
+    criteria.length > 0 ||
+    conflictMentioned ||
+    positionCount > 0;
+  const summaryAction = includesAny(text, [
+    "总结",
+    "结论",
+    "最终",
+    "归纳",
+    "代表小组",
+  ]);
+  const integrationAction = includesAny(text, [
+    "结合",
+    "整合",
+    "兼顾",
+    "共同点",
+    "折中",
+    "吸收",
+    "保留你的",
+  ]) || /先.+再/.test(text);
+  const timeAction = includesAny(text, [
+    "时间",
+    "还剩",
+    "推进",
+    "收敛",
+    "投票",
+    "节奏",
+  ]);
+  const criteriaAction = includesAny(text, [
+    "标准",
+    "维度",
+    "优先级",
+    "评价",
+    "衡量",
+    "目标是",
+    "依据",
+    "比较",
+    "对比",
+  ]);
+  const challengeAction = includesAny(text, [
+    "不同意",
+    "反对",
+    "但是",
+    "风险",
+    "问题是",
+    "为什么",
+    "质疑",
+    "疑问",
+  ]);
+  const proposalAction = includesAny(text, [
+    "我建议",
+    "建议",
+    "我选择",
+    "选择",
+    "优先",
+    "方案",
+    "先做",
+  ]);
+  const supportAction = includesAny(text, ["同意", "赞成", "支持", "认可", "有道理"]);
+
+  return {
+    criteria,
+    options,
+    summary: summaryAction && (options.length > 0 || criteria.length > 0),
+    integrate:
+      integrationAction &&
+      (options.length >= 2 || positionCount >= 2 || conflictMentioned),
+    time:
+      timeAction &&
+      (options.length > 0 ||
+        criteria.some((item) => item !== "实施确定性") ||
+        conflictMentioned ||
+        positionCount > 0 ||
+        includesAny(text, ["周期", "上线", "落地", "交付"])),
+    criteriaIntent: criteriaAction && criteria.length > 0,
+    challenge:
+      challengeAction && hasVerifiableRisk(text, selectedScenario, context),
+    proposal: proposalAction && options.length > 0,
+    support: supportAction && hasCaseEntity,
+  };
+}
+
+export function classifyIntent(
+  rawText: string,
+  scenarioOrId: Scenario | ScenarioId = "campus-career-retention",
+  context?: IntentContext,
+): Intent {
+  const selectedScenario =
+    typeof scenarioOrId === "string" ? getScenario(scenarioOrId) : scenarioOrId;
+  const signals = intentSignals(rawText, selectedScenario, context);
+
+  if (signals.summary) return "summary";
+  if (signals.integrate) return "integrate";
+  if (signals.time) return "time";
+  if (signals.criteriaIntent) return "criteria";
+  if (signals.challenge) return "challenge";
+  if (signals.proposal) return "proposal";
+  if (signals.support) return "support";
+  return "general";
 }
 
 function unique(items: string[]) {
@@ -417,6 +557,76 @@ function fallbackFinalAssessment(
   };
 }
 
+function compactEvidenceText(value: string) {
+  let normalized = "";
+  const sourceIndexes: number[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (/\s/.test(character)) continue;
+    normalized += character.toLowerCase();
+    sourceIndexes.push(index);
+  }
+  return { normalized, sourceIndexes };
+}
+
+function anchorEvidence(text: string, suppliedEvidence: string) {
+  const evidence = compactEvidenceText(suppliedEvidence.trim()).normalized;
+  const source = compactEvidenceText(text);
+  if (!evidence || !source.normalized) return undefined;
+
+  const exactIndex = source.normalized.indexOf(evidence);
+  if (exactIndex >= 0) {
+    const start = source.sourceIndexes[exactIndex];
+    const end = source.sourceIndexes[exactIndex + evidence.length - 1];
+    return text.slice(start, end + 1).trim();
+  }
+
+  let previous = new Array(evidence.length + 1).fill(0) as number[];
+  let bestLength = 0;
+  let bestSourceEnd = 0;
+  for (let sourceIndex = 1; sourceIndex <= source.normalized.length; sourceIndex += 1) {
+    const current = new Array(evidence.length + 1).fill(0) as number[];
+    for (let evidenceIndex = 1; evidenceIndex <= evidence.length; evidenceIndex += 1) {
+      if (
+        source.normalized[sourceIndex - 1] === evidence[evidenceIndex - 1]
+      ) {
+        current[evidenceIndex] = previous[evidenceIndex - 1] + 1;
+        if (current[evidenceIndex] > bestLength) {
+          bestLength = current[evidenceIndex];
+          bestSourceEnd = sourceIndex;
+        }
+      }
+    }
+    previous = current;
+  }
+  if (bestLength < 8) return undefined;
+  const start = source.sourceIndexes[bestSourceEnd - bestLength];
+  const end = source.sourceIndexes[bestSourceEnd - 1];
+  return text.slice(start, end + 1).trim();
+}
+
+function intentIsGrounded(
+  text: string,
+  intent: Intent,
+  fallbackIntent: Intent,
+  selectedScenario: Scenario,
+  context?: IntentContext,
+) {
+  if (intent === "general") return true;
+  if (fallbackIntent === "summary" && intent === "summary") return true;
+  const signals = intentSignals(text, selectedScenario, context);
+  const grounded: Record<Exclude<Intent, "general">, boolean> = {
+    criteria: signals.criteriaIntent,
+    proposal: signals.proposal,
+    challenge: signals.challenge,
+    integrate: signals.integrate,
+    time: signals.time,
+    summary: signals.summary,
+    support: signals.support,
+  };
+  return grounded[intent];
+}
+
 function materializeAssessment(
   text: string,
   turn: number,
@@ -424,18 +634,31 @@ function materializeAssessment(
   selectedScenario: Scenario,
   difficulty: TrainingDifficulty,
   supplied?: DirectorAssessment,
+  context?: IntentContext,
 ): TurnAssessment {
   const suppliedEvidence = supplied?.evidence.trim() ?? "";
+  const anchoredSuppliedEvidence = supplied
+    ? anchorEvidence(text, suppliedEvidence)
+    : undefined;
   const suppliedIsGrounded = Boolean(
-    supplied && suppliedEvidence && text.includes(suppliedEvidence),
+    supplied &&
+      anchoredSuppliedEvidence &&
+      intentIsGrounded(
+        text,
+        supplied.intent,
+        fallback.intent,
+        selectedScenario,
+        context,
+      ),
   );
   const assessment = suppliedIsGrounded && supplied ? supplied : fallback;
-  const allowedOptions = new Set(selectedScenario.options.map((option) => option.title));
+  const groundedCriteria = new Set(extractCriteria(text, selectedScenario));
+  const groundedOptions = new Set(extractOptions(text, selectedScenario));
   const difficultyProfile = getDifficulty(difficulty);
   const source = suppliedIsGrounded ? "ai" : "fallback";
-  const evidence = text.includes(assessment.evidence.trim())
-    ? assessment.evidence.trim()
-    : text.slice(0, 100);
+  const evidence =
+    (source === "ai" ? anchoredSuppliedEvidence : anchorEvidence(text, assessment.evidence)) ??
+    text.slice(0, 100);
   const proposedSuggestion = assessment.suggestion
     .trim()
     .replace(/^(?:下一步|建议)\s*[：:，,]?\s*/, "")
@@ -444,7 +667,7 @@ function materializeAssessment(
     /\d+(?:\.\d+)?(?:周|天|人|次|万|%|％)|[一二三四五六七八九十百]+(?:周|天|人|次|万)/g,
   );
   const suggestionIntroducesNumbers = suggestionNumbers?.some(
-    (number) => !text.includes(number),
+    (number) => !includesNormalized(text, number),
   );
   const strongConsensusFloor: Record<Intent, number> = {
     criteria: 5,
@@ -453,7 +676,7 @@ function materializeAssessment(
     integrate: 8,
     time: 5,
     summary: 8,
-    support: 2,
+    support: 0,
     general: 0,
   };
   const consensusFloor = assessment.quality === "strong" ? strongConsensusFloor[assessment.intent] : -4;
@@ -468,6 +691,23 @@ function materializeAssessment(
     },
     { ...fallback.scoreDeltas },
   );
+  let consensusDelta = clamp(
+    Math.round(
+      Math.max(Number(assessment.consensusDelta) || 0, consensusFloor) *
+        difficultyProfile.consensusMultiplier,
+    ),
+    -4,
+    18,
+  );
+  if (assessment.intent === "support" || assessment.intent === "general") {
+    consensusDelta = Math.min(0, consensusDelta);
+  }
+  if (
+    assessment.intent === "challenge" &&
+    !hasVerifiableRisk(text, selectedScenario, context)
+  ) {
+    consensusDelta = Math.min(0, consensusDelta);
+  }
 
   return {
     ...assessment,
@@ -481,31 +721,76 @@ function materializeAssessment(
       !proposedSuggestion || suggestionIntroducesNumbers
         ? fallback.suggestion
         : proposedSuggestion,
-    criteriaAdded: unique(assessment.criteriaAdded.map((item) => item.trim()).filter(Boolean)).slice(
-      0,
-      4,
-    ),
+    criteriaAdded: unique(
+      assessment.criteriaAdded
+        .map((item) => item.trim())
+        .filter((item) => groundedCriteria.has(item)),
+    ).slice(0, 4),
     finalistsAdded: unique(
-      assessment.finalistsAdded.map((item) => item.trim()).filter((item) => allowedOptions.has(item)),
+      assessment.finalistsAdded
+        .map((item) => item.trim())
+        .filter((item) => groundedOptions.has(item)),
     ).slice(0, 3),
     unresolvedConflict: assessment.unresolvedConflict.trim().slice(0, 120),
-    consensusDelta: clamp(
-      Math.round(
-        Math.max(Number(assessment.consensusDelta) || 0, consensusFloor) *
-          difficultyProfile.consensusMultiplier,
-      ),
-      -4,
-      18,
-    ),
+    consensusDelta,
     scoreDeltas,
   };
 }
 
-function eventFromAssessment(assessment: TurnAssessment): InfluenceEvent {
+function unaddressedStanceReason(
+  text: string,
+  state: GroupState,
+  selectedScenario: Scenario,
+) {
+  const participantNames: Record<"cheng" | "lin" | "zhou", string> = {
+    cheng: "程野",
+    lin: "林乔",
+    zhou: "周可",
+  };
+  const userEntities = new Set([
+    ...extractCriteria(text, selectedScenario),
+    ...extractOptions(text, selectedScenario),
+  ]);
+  const candidateMessages = [...state.messages]
+    .reverse()
+    .filter((item) =>
+      (["cheng", "lin", "zhou"] as string[]).includes(item.speaker),
+    )
+    .slice(0, 12);
+  const objections = candidateMessages.filter((item) =>
+    /反对|不同意|但是|但|风险|担心|质疑|问题|不足|还没有|不能|不稳定|如果/.test(
+      item.content,
+    ),
+  );
+  const missing = [...objections, ...candidateMessages].find((item) => {
+    const messageEntities = new Set([
+      ...extractCriteria(item.content, selectedScenario),
+      ...extractOptions(item.content, selectedScenario),
+    ]);
+    const sharesEntity = [...messageEntities].some((entity) =>
+      userEntities.has(entity),
+    );
+    return !sharesEntity && !anchorEvidence(text, item.content);
+  });
+
+  if (missing && missing.speaker !== "user" && missing.speaker !== "system") {
+    const quote = missing.content.trim().slice(0, 52);
+    const suffix = missing.content.trim().length > 52 ? "…" : "";
+    return `尚未回应${participantNames[missing.speaker]}的具体反对：“${quote}${suffix}”`;
+  }
+  return `尚未回应当前分歧：“${state.conflict}”`;
+}
+
+function eventFromAssessment(
+  assessment: TurnAssessment,
+  text: string,
+  state: GroupState,
+  selectedScenario: Scenario,
+): InfluenceEvent {
   const tone: InfluenceEvent["tone"] =
-    assessment.quality === "strong"
+    assessment.consensusDelta > 0
       ? "positive"
-      : assessment.quality === "weak"
+      : assessment.consensusDelta < 0 || assessment.quality === "weak"
         ? "warning"
         : "neutral";
   return influence(
@@ -516,6 +801,10 @@ function eventFromAssessment(assessment: TurnAssessment): InfluenceEvent {
     assessment.evidence,
     assessment.suggestion,
     assessment.source,
+    assessment.consensusDelta,
+    assessment.consensusDelta <= 0
+      ? unaddressedStanceReason(text, state, selectedScenario)
+      : undefined,
   );
 }
 
@@ -638,7 +927,7 @@ export function applyUserTurn(
   const turn = state.turn + 1;
   const fallback = fallbackAssessment(
     text,
-    classifyIntent(text, selectedScenario),
+    classifyIntent(text, selectedScenario, state),
     selectedScenario,
   );
   const assessment = materializeAssessment(
@@ -648,6 +937,7 @@ export function applyUserTurn(
     selectedScenario,
     difficulty,
     directorTurn?.assessment,
+    state,
   );
   const intent = assessment.intent;
   const userMessage = message("user", text, turn, intent);
@@ -674,9 +964,7 @@ export function applyUserTurn(
   const finalists =
     proposedOptions.length > 0
       ? unique([...state.finalists, ...proposedOptions]).slice(-3)
-      : intent === "integrate" && state.finalists.length === 0
-        ? [...selectedScenario.fallbackFinalists]
-        : state.finalists;
+      : state.finalists;
 
   const conflict = assessment.unresolvedConflict
     ? assessment.unresolvedConflict
@@ -694,7 +982,10 @@ export function applyUserTurn(
     finalists,
     conflict,
     messages: [...state.messages, userMessage, ...aiMessages],
-    influence: [...state.influence, eventFromAssessment(assessment)],
+    influence: [
+      ...state.influence,
+      eventFromAssessment(assessment, text, state, selectedScenario),
+    ],
     assessments: [...(state.assessments ?? []), assessment],
     voiceMetrics: voiceMetric
       ? [...(state.voiceMetrics ?? []), voiceMetric]
@@ -727,6 +1018,7 @@ export function finishSession(
     selectedScenario,
     difficulty,
     directorTurn?.assessment,
+    state,
   );
   const voiceMetric = createVoiceMetric(statement, turn, voiceCapture);
 
@@ -755,7 +1047,10 @@ export function finishSession(
         turn + 0.1,
       ),
     ],
-    influence: [...state.influence, eventFromAssessment(assessment)],
+    influence: [
+      ...state.influence,
+      eventFromAssessment(assessment, statement, state, selectedScenario),
+    ],
     assessments: [...(state.assessments ?? []), assessment],
     voiceMetrics: voiceMetric
       ? [...(state.voiceMetrics ?? []), voiceMetric]

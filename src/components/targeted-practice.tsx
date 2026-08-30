@@ -192,6 +192,7 @@ export default function TargetedPractice({
       originalVoiceMetric,
       revisedVoiceMetric,
       scenario,
+      snapshot: restoredState,
     });
     setResult(attempt);
     setIsAnalyzing(false);

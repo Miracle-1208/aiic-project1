@@ -10,6 +10,30 @@ import {
 import { scenarios } from "./scenario";
 import type { TurnAssessment } from "./types";
 
+function liveSnapshot() {
+  return {
+    conflict: "短期修复，还是长期用户价值？",
+    criteria: ["用户影响", "投入产出比", "实施确定性"],
+    finalists: ["修复消息提醒", "优化新用户引导"],
+    messages: [
+      {
+        id: "cheng-live",
+        speaker: "cheng" as const,
+        content: "我主张先修复消息提醒，用 2 周处理安卓用户投诉。",
+        turn: 0,
+        createdAt: "09:00",
+      },
+      {
+        id: "lin-live",
+        speaker: "lin" as const,
+        content: "我反对只做短期修复，长期用户价值还没有被验证。",
+        turn: 0,
+        createdAt: "09:01",
+      },
+    ],
+  };
+}
+
 function assessment(
   quality: TurnAssessment["quality"],
   consensusDelta: number,
@@ -123,6 +147,7 @@ describe("targeted practice comparison", () => {
 
   it("ranks a complete integrated answer above a short AI-favored answer", () => {
     const scenario = scenarios[0];
+    const snapshot = liveSnapshot();
     const texts = [
       "我同意先处理消息提醒和新用户引导，因为它们更快，也更便宜。",
       "周可提出标准不清、林乔担心长期价值，我建议把标准按优先级排为：先看六周内能否直接改善留存，再看预算效率，最后保留长期价值验证。基于这个顺序，先修复消息提醒并同步优化新用户引导，两周后用提醒到达率和次日留存决定是否继续投入。",
@@ -140,14 +165,50 @@ describe("targeted practice comparison", () => {
           [10, 9, 0][index],
         ),
         scenario,
+        snapshot,
         completedAt: `2026-08-30T10:0${index}:00.000Z`,
         id: `calibrated-${index + 1}`,
       }),
     );
 
-    expect(scoreRetrainText(texts[2], scenario).total).toBeGreaterThan(
-      scoreRetrainText(texts[0], scenario).total,
+    expect(scoreRetrainText(texts[2], scenario, snapshot).total).toBeGreaterThan(
+      scoreRetrainText(texts[0], scenario, snapshot).total,
     );
     expect(bestRetrainAttempt(attempts)?.id).toBe("calibrated-3");
+  });
+
+  it("does not reward regex bingo without a concrete link to the live conflict", () => {
+    const score = scoreRetrainText(
+      "整合、程野、两周、如果。",
+      scenarios[0],
+      liveSnapshot(),
+    );
+
+    expect(score.total).toBeLessThan(30);
+    expect(score.listeningIntegration).toBeLessThan(10);
+    expect(score.actionValidation).toBe(0);
+  });
+
+  it("rewards a retrain answer that resolves the snapshot conflict with real options", () => {
+    const score = scoreRetrainText(
+      "程野主张先修复消息提醒，林乔反对只做短期修复、担心长期用户价值。我建议先用 8 万元、2 周修复消息提醒，验证安卓用户投诉是否下降；再优化新用户引导，并继续验证长期用户价值。",
+      scenarios[0],
+      liveSnapshot(),
+    );
+
+    expect(score.total).toBeGreaterThanOrEqual(75);
+    expect(score.listeningIntegration).toBeGreaterThanOrEqual(20);
+    expect(score.conclusionPriority).toBeGreaterThanOrEqual(20);
+    expect(score.actionValidation).toBeGreaterThanOrEqual(15);
+  });
+
+  it("does not count fabricated numbers as case evidence", () => {
+    const score = scoreRetrainText(
+      "先修复消息提醒，再优化新用户引导，投入 99 万元并在 10 周后验证。",
+      scenarios[0],
+      liveSnapshot(),
+    );
+
+    expect(score.evidenceConstraints).toBe(0);
   });
 });

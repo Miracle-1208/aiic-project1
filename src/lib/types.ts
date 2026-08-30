@@ -155,6 +155,8 @@ export interface InfluenceEvent {
   evidence?: string;
   suggestion?: string;
   source?: "ai" | "fallback";
+  consensusDelta?: number;
+  noProgressReason?: string;
 }
 
 export interface VoiceCapture {
