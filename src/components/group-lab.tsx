@@ -21,6 +21,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import CaseLibrary from "@/components/case-library";
+import TrainingHistory from "@/components/training-history";
 import {
   applyUserTurn,
   createInitialState,
@@ -28,6 +29,12 @@ import {
   formatTime,
   tick,
 } from "@/lib/engine";
+import {
+  appendTrainingRecord,
+  createTrainingRecord,
+  persistTrainingHistory,
+  readTrainingHistory,
+} from "@/lib/history";
 import {
   getDifficulty,
   getParticipantsForScenario,
@@ -42,6 +49,7 @@ import type {
   Participant,
   Scenario,
   ScenarioId,
+  TrainingRecord,
   TrainingDifficulty,
   View,
 } from "@/lib/types";
@@ -190,7 +198,7 @@ function Avatar({ participant, size = "md" }: { participant: Participant; size?:
   );
 }
 
-function Welcome({ onStart }: { onStart: () => void }) {
+function Welcome({ onStart, onHistory }: { onStart: () => void; onHistory: () => void }) {
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f6f7fb]">
       <div className="hero-grid absolute inset-0 opacity-70" />
@@ -219,6 +227,13 @@ function Welcome({ onStart }: { onStart: () => void }) {
             >
               进入群面案例库
               <ArrowRight className="size-4 transition group-hover:translate-x-1" />
+            </button>
+            <button
+              type="button"
+              onClick={onHistory}
+              className="inline-flex h-14 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white/80 px-6 text-sm font-bold text-slate-600 transition hover:border-indigo-200 hover:text-indigo-700"
+            >
+              <TrendingUp className="size-4" /> 我的训练
             </button>
             <div className="flex items-center justify-center gap-4 px-3 text-xs font-semibold text-slate-500 sm:justify-start">
               <span className="flex items-center gap-1.5"><Check className="size-3.5 text-emerald-500" /> 无需登录</span>
@@ -776,10 +791,12 @@ function Report({
   state,
   onRestart,
   onLibrary,
+  onHistory,
 }: {
   state: GroupState;
   onRestart: () => void;
   onLibrary: () => void;
+  onHistory: () => void;
 }) {
   const report = useMemo(() => buildReport(state), [state]);
   const selectedScenario = getScenario(state.scenarioId);
@@ -870,9 +887,12 @@ function Report({
               </div>
               <p className="mt-5 line-clamp-4 text-xs leading-6 text-slate-500">“{state.finalStatement}”</p>
             </section>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-3">
               <button type="button" onClick={onLibrary} className="flex h-13 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-black text-slate-600 transition hover:border-indigo-200 hover:text-indigo-700">
                 返回题库
+              </button>
+              <button type="button" onClick={onHistory} className="flex h-13 items-center justify-center gap-2 rounded-2xl border border-indigo-100 bg-indigo-50 text-sm font-black text-indigo-700 transition hover:bg-indigo-100">
+                <TrendingUp className="size-4" /> 成长档案
               </button>
               <button type="button" onClick={onRestart} className="flex h-13 items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition hover:bg-indigo-600">
                 <RotateCcw className="size-4" /> 再练一次
@@ -894,6 +914,7 @@ export default function GroupLab() {
   const [state, setState] = useState<GroupState>(() =>
     createInitialState("campus-career-retention", "standard"),
   );
+  const [history, setHistory] = useState<TrainingRecord[]>(() => readTrainingHistory());
   const selectedScenario = getScenario(selectedScenarioId);
   const team = getParticipantsForScenario(selectedScenarioId);
 
@@ -916,17 +937,49 @@ export default function GroupLab() {
 
   const complete = (statement: string, directorTurn?: DirectorTurn) => {
     if (statement.trim().length < 20) return;
-    setState((current) => finishSession(current, statement, directorTurn));
+    const completedState = finishSession(state, statement, directorTurn);
+    const record = createTrainingRecord(completedState);
+    setState(completedState);
+    setHistory((current) => {
+      const next = appendTrainingRecord(current, record);
+      persistTrainingHistory(next);
+      return next;
+    });
     setView("report");
   };
 
-  if (view === "welcome") return <Welcome onStart={() => setView("library")} />;
+  const trainAgain = (record: TrainingRecord) => {
+    setSelectedScenarioId(record.scenarioId);
+    setDifficulty(record.difficulty);
+    setState(createInitialState(record.scenarioId, record.difficulty));
+    setView("briefing");
+  };
+
+  if (view === "welcome") {
+    return (
+      <Welcome
+        onStart={() => setView("library")}
+        onHistory={() => setView("history")}
+      />
+    );
+  }
+  if (view === "history") {
+    return (
+      <TrainingHistory
+        records={history}
+        loaded
+        onBack={() => setView("library")}
+        onTrainAgain={trainAgain}
+      />
+    );
+  }
   if (view === "library") {
     return (
       <CaseLibrary
         difficulty={difficulty}
         onDifficultyChange={setDifficulty}
         onSelect={selectScenario}
+        onHistory={() => setView("history")}
         onBack={() => setView("welcome")}
       />
     );
@@ -948,6 +1001,7 @@ export default function GroupLab() {
         state={state}
         onRestart={restart}
         onLibrary={() => setView("library")}
+        onHistory={() => setView("history")}
       />
     );
   }

@@ -1,4 +1,4 @@
-export type View = "welcome" | "library" | "briefing" | "room" | "report";
+export type View = "welcome" | "library" | "briefing" | "room" | "report" | "history";
 
 export type ScenarioId =
   | "campus-career-retention"
@@ -170,4 +170,17 @@ export interface SessionReport {
   strength: string;
   focus: string;
   evidence: string;
+}
+
+export interface TrainingRecord {
+  id: string;
+  completedAt: string;
+  scenarioId: ScenarioId;
+  difficulty: TrainingDifficulty;
+  turns: number;
+  consensus: number;
+  finalists: string[];
+  finalStatement: string;
+  influence: InfluenceEvent[];
+  report: SessionReport;
 }

@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  TrendingUp,
   Users,
 } from "lucide-react";
 
@@ -21,7 +22,7 @@ function ScenarioIcon({ category }: { category: string }) {
   return <Scale className="size-5" />;
 }
 
-function LibraryHeader({ onBack }: { onBack: () => void }) {
+function LibraryHeader({ onBack, onHistory }: { onBack: () => void; onHistory: () => void }) {
   return (
     <header className="relative z-20 mx-auto flex w-full max-w-[1440px] items-center justify-between px-5 py-5 sm:px-8 lg:px-12">
       <button
@@ -43,13 +44,22 @@ function LibraryHeader({ onBack }: { onBack: () => void }) {
           <span className="block text-[10px] font-semibold tracking-[0.18em] text-slate-400">GROUPLAB</span>
         </span>
       </button>
-      <button
-        type="button"
-        onClick={onBack}
-        className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-500 transition hover:border-slate-300 hover:text-slate-950"
-      >
-        <ArrowLeft className="size-3.5" /> 返回首页
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onHistory}
+          className="flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-xs font-bold text-white transition hover:bg-indigo-600"
+        >
+          <TrendingUp className="size-3.5" /> <span className="hidden sm:inline">成长档案</span>
+        </button>
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-500 transition hover:border-slate-300 hover:text-slate-950"
+        >
+          <ArrowLeft className="size-3.5" /> <span className="hidden sm:inline">返回首页</span>
+        </button>
+      </div>
     </header>
   );
 }
@@ -58,11 +68,13 @@ export default function CaseLibrary({
   difficulty,
   onDifficultyChange,
   onSelect,
+  onHistory,
   onBack,
 }: {
   difficulty: TrainingDifficulty;
   onDifficultyChange: (difficulty: TrainingDifficulty) => void;
   onSelect: (scenarioId: ScenarioId) => void;
+  onHistory: () => void;
   onBack: () => void;
 }) {
   const difficultyProfile = getDifficulty(difficulty);
@@ -72,7 +84,7 @@ export default function CaseLibrary({
       <div className="hero-grid absolute inset-0 opacity-60" />
       <div className="absolute -left-32 top-24 size-96 rounded-full bg-indigo-200/30 blur-3xl" />
       <div className="absolute -right-24 top-10 size-[420px] rounded-full bg-cyan-200/25 blur-3xl" />
-      <LibraryHeader onBack={onBack} />
+      <LibraryHeader onBack={onBack} onHistory={onHistory} />
 
       <section className="relative mx-auto max-w-[1260px] px-5 pb-20 pt-10 sm:px-8 lg:px-12">
         <div className="grid items-end gap-8 lg:grid-cols-[1fr_390px]">
