@@ -44,6 +44,7 @@ import {
   formatTime,
   tick,
 } from "@/lib/engine";
+import { buildContrastLines } from "@/lib/demo-contrast";
 import {
   appendTrainingRecord,
   appendRetrainAttempt,
@@ -493,10 +494,16 @@ function Room({
   const [isFinalAnalyzing, setIsFinalAnalyzing] = useState(false);
   const [runtimeMode, setRuntimeMode] = useState<"live" | "demo" | null>(null);
   const [directorNotice, setDirectorNotice] = useState("");
+  const [contrastStatus, setContrastStatus] = useState<string | null>(null);
+  const [isContrastRunning, setIsContrastRunning] = useState(false);
   const [voiceCapture, setVoiceCapture] = useState<VoiceCapture | null>(null);
   const [finalVoiceCapture, setFinalVoiceCapture] = useState<VoiceCapture | null>(null);
   const directorStatus = useDirectorStatus();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const stateRef = useRef(state);
+  const respondingRef = useRef(false);
+  const contrastRunningRef = useRef(false);
   const spokenMessageCountRef = useRef(state.messages.length);
   const selectedScenario = state.scenario ?? getScenario(state.scenarioId);
   const difficultyProfile = getDifficulty(state.difficulty);
@@ -529,6 +536,10 @@ function Room({
   }, [setState]);
 
   useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [isResponding, state.messages.length]);
 
@@ -554,11 +565,14 @@ function Room({
     else finalSpeechInput.start();
   };
 
-  const send = async () => {
-    const userText = input.trim();
-    if (!userText || isResponding || speechInput.isListening) return;
+  const sendText = async (
+    rawText: string,
+    completedVoiceCapture?: VoiceCapture,
+  ): Promise<GroupState | undefined> => {
+    const userText = rawText.trim();
+    if (!userText || respondingRef.current || speechInput.isListening) return undefined;
 
-    const completedVoiceCapture = voiceCapture ?? undefined;
+    respondingRef.current = true;
     setInput("");
     setVoiceCapture(null);
     setIsResponding(true);
@@ -569,7 +583,12 @@ function Room({
     const timeout = window.setTimeout(() => controller.abort(), 30_000);
 
     try {
-      directorTurn = await requestDirectorTurn(state, userText, "discussion", controller.signal);
+      directorTurn = await requestDirectorTurn(
+        stateRef.current,
+        userText,
+        "discussion",
+        controller.signal,
+      );
       setRuntimeMode("live");
     } catch (error) {
       setRuntimeMode("demo");
@@ -585,11 +604,99 @@ function Room({
       );
     } finally {
       window.clearTimeout(timeout);
-      setState((current) =>
-        applyUserTurn(current, userText, directorTurn, completedVoiceCapture),
-      );
-      setIsResponding(false);
     }
+
+    const nextState = await new Promise<GroupState>((resolve) => {
+      setState((current) => {
+        const next = applyUserTurn(
+          current,
+          userText,
+          directorTurn,
+          completedVoiceCapture,
+        );
+        stateRef.current = next;
+        resolve(next);
+        return next;
+      });
+    });
+    respondingRef.current = false;
+    setIsResponding(false);
+    return nextState;
+  };
+
+  const send = async () => {
+    const userText = input.trim();
+    if (
+      !userText ||
+      isContrastRunning ||
+      finalizing ||
+      isResponding ||
+      speechInput.isListening
+    ) {
+      return;
+    }
+
+    await sendText(userText, voiceCapture ?? undefined);
+  };
+
+  const runContrastDemo = async () => {
+    if (
+      stateRef.current.turn !== 0 ||
+      respondingRef.current ||
+      contrastRunningRef.current ||
+      finalizing ||
+      isFinalAnalyzing ||
+      speechInput.isListening
+    ) {
+      return;
+    }
+
+    contrastRunningRef.current = true;
+    setIsContrastRunning(true);
+    setInput("");
+    setVoiceCapture(null);
+    speechInput.clearNotice();
+    speechPlayback.cancel();
+
+    try {
+      const lines = buildContrastLines(selectedScenario, stateRef.current.difficulty);
+      setContrastStatus("对照 1/2：空发言不会推动团队");
+      const firstState = await sendText(lines.vague);
+      if (!firstState) return;
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_000));
+
+      setContrastStatus("对照 2/2：点名主张和真实方案才会改变共识");
+      const secondState = await sendText(lines.grounded);
+      if (!secondState) return;
+
+      const recognitionWarning =
+        secondState.consensus <= firstState.consensus
+          ? " 本题方案名可能未被识别，请点方案芯片或换内置案例再试。"
+          : "";
+      setContrastStatus(
+        `对照结束。先空话、再整合，看右侧共识与未推动原因。${recognitionWarning}`,
+      );
+    } finally {
+      contrastRunningRef.current = false;
+      setIsContrastRunning(false);
+    }
+  };
+
+  const insertOptionTitle = (title: string) => {
+    const textarea = inputRef.current;
+    const selectionStart = textarea?.selectionStart ?? input.length;
+    const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+    const nextInput = `${input.slice(0, selectionStart)}${title}${input.slice(selectionEnd)}`;
+    const nextCursor = selectionStart + title.length;
+
+    setInput(nextInput);
+    setVoiceCapture(null);
+    speechInput.clearNotice();
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
   };
 
   const submitFinalStatement = async () => {
@@ -632,6 +739,15 @@ function Room({
   const currentUserStance = state.finalists.length ? state.finalists.join(" + ") : "尚未形成明确选择";
   const effectiveDirectorMode = runtimeMode ?? directorStatus.mode;
   const latestInfluence = state.influence.at(-1);
+  const inputDisabled =
+    isResponding || isContrastRunning || finalizing || speechInput.isListening;
+  const contrastDisabled =
+    state.turn !== 0 ||
+    isResponding ||
+    isContrastRunning ||
+    finalizing ||
+    isFinalAnalyzing ||
+    speechInput.isListening;
 
   return (
     <main className="flex min-h-screen flex-col bg-[#f3f5f8]">
@@ -737,21 +853,66 @@ function Room({
 
           <div className="border-t border-slate-200 bg-white p-3 sm:p-4">
             <div className="mx-auto max-w-3xl">
+              {contrastStatus && (
+                <div
+                  className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-[11px] font-bold leading-5 text-indigo-700"
+                  aria-live="polite"
+                >
+                  <span>{contrastStatus}</span>
+                  {!isContrastRunning && (
+                    <button
+                      type="button"
+                      onClick={() => setContrastStatus(null)}
+                      className="shrink-0 rounded-full px-2 py-0.5 text-sm text-indigo-400 transition hover:bg-indigo-100 hover:text-indigo-700"
+                      aria-label="关闭演示对照提示"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
                 {selectedScenario.quickActions.map((action, index) => (
-                  <button key={action} type="button" onClick={() => { setInput(action); setVoiceCapture(null); speechInput.clearNotice(); }} disabled={isResponding || speechInput.isListening} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
+                  <button key={action} type="button" onClick={() => { setInput(action); setVoiceCapture(null); speechInput.clearNotice(); }} disabled={inputDisabled} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
                     {index === 0 ? "建立标准" : index === 1 ? "整合分歧" : "控制时间"}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => void runContrastDemo()}
+                  disabled={contrastDisabled}
+                  title={
+                    state.turn !== 0
+                      ? "请新开一场后再演示对照"
+                      : "连续演示空话与真整合"
+                  }
+                  className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[10px] font-black text-indigo-700 transition hover:border-indigo-300 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  演示对照
+                </button>
+                <span className="shrink-0 self-center text-[9px] font-bold text-slate-400">方案</span>
+                {selectedScenario.options.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => insertOptionTitle(option.title)}
+                    disabled={inputDisabled}
+                    className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] font-semibold text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    title={`插入方案：${option.title}`}
+                  >
+                    {option.title}
                   </button>
                 ))}
               </div>
               <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 transition focus-within:border-indigo-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-indigo-50">
                 <textarea
+                  ref={inputRef}
                   value={input}
                   onChange={(event) => {
                     setInput(event.target.value);
                     speechInput.clearNotice();
                   }}
-                  disabled={isResponding || speechInput.isListening}
+                  disabled={inputDisabled}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -765,7 +926,7 @@ function Room({
                 <button
                   type="button"
                   onClick={toggleMicrophone}
-                  disabled={isResponding || !speechInput.isSupported}
+                  disabled={inputDisabled || !speechInput.isSupported}
                   className={`grid size-11 shrink-0 place-items-center rounded-xl text-white transition disabled:cursor-not-allowed disabled:opacity-30 ${
                     speechInput.isListening
                       ? "animate-pulse bg-rose-500 hover:bg-rose-600"
@@ -777,7 +938,7 @@ function Room({
                 >
                   {speechInput.isListening ? <Square className="size-3.5 fill-current" /> : <Mic className="size-4" />}
                 </button>
-                <button type="button" onClick={() => void send()} disabled={isResponding || speechInput.isListening || !input.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30" aria-label="发送发言">
+                <button type="button" onClick={() => void send()} disabled={inputDisabled || !input.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30" aria-label="发送发言">
                   <Send className="size-4" />
                 </button>
               </div>
@@ -804,7 +965,7 @@ function Room({
                           ? "点击麦克风口述，确认文字后发送 · 也可以直接打字"
                           : "当前浏览器仅支持打字发言")}
                 </p>
-                <button type="button" onClick={() => { speechPlayback.cancel(); setFinalizing(true); }} disabled={state.turn < 2 || isResponding || speechInput.isListening} className="flex items-center gap-1 text-[10px] font-black text-indigo-600 transition hover:text-indigo-800 disabled:cursor-not-allowed disabled:text-slate-300">
+                <button type="button" onClick={() => { speechPlayback.cancel(); setFinalizing(true); }} disabled={state.turn < 2 || inputDisabled} className="flex items-center gap-1 text-[10px] font-black text-indigo-600 transition hover:text-indigo-800 disabled:cursor-not-allowed disabled:text-slate-300">
                   进入最终陈述 <ChevronRight className="size-3" />
                 </button>
               </div>
