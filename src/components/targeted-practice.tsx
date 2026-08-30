@@ -23,6 +23,8 @@ import {
   bestRetrainAttempt,
   createRetrainAttempt,
   RETRAIN_CHALLENGE_LIMIT,
+  RETRAIN_RUBRIC_ITEMS,
+  retrainRubricReason,
   retrainAttemptsForTurn,
 } from "@/lib/retrain";
 import { getDifficulty, getScenario } from "@/lib/scenario";
@@ -110,6 +112,10 @@ export default function TargetedPractice({
   }, []);
 
   const bestAttempt = bestRetrainAttempt(challengeAttempts);
+  const bestRubricDelta =
+    bestAttempt?.revisedRubric && bestAttempt.originalRubric
+      ? bestAttempt.revisedRubric.total - bestAttempt.originalRubric.total
+      : undefined;
   const challengeComplete =
     challengeAttempts.length >= RETRAIN_CHALLENGE_LIMIT;
   const showComparison = Boolean(result) || challengeComplete;
@@ -185,6 +191,7 @@ export default function TargetedPractice({
       revisedAssessment,
       originalVoiceMetric,
       revisedVoiceMetric,
+      scenario,
     });
     setResult(attempt);
     setIsAnalyzing(false);
@@ -325,9 +332,9 @@ export default function TargetedPractice({
                   <h2 className="mt-3 text-2xl font-black text-slate-950">第 {targetTurn} 轮连续重练对比</h2>
                   <p className="mt-2 text-xs font-semibold text-slate-500">原发言与每次尝试使用同一讨论现场和同一套评分规则。</p>
                 </div>
-                <div className={`rounded-2xl bg-white px-5 py-3 text-center shadow-sm ${(bestAttempt?.impactDelta ?? 0) > 0 ? "text-emerald-700" : "text-slate-700"}`}>
-                  <p className="text-[9px] font-black text-slate-400">最佳综合提升</p>
-                  <p className="mt-1 text-3xl font-black">{deltaLabel(bestAttempt?.impactDelta ?? 0)}</p>
+                <div className={`rounded-2xl bg-white px-5 py-3 text-center shadow-sm ${(bestRubricDelta ?? bestAttempt?.impactDelta ?? 0) > 0 ? "text-emerald-700" : "text-slate-700"}`}>
+                  <p className="text-[9px] font-black text-slate-400">最佳训练提升</p>
+                  <p className="mt-1 text-3xl font-black">{deltaLabel(bestRubricDelta ?? bestAttempt?.impactDelta ?? 0)}</p>
                 </div>
               </div>
             </section>
@@ -340,6 +347,7 @@ export default function TargetedPractice({
                   text: displayAttempt.originalText,
                   quality: displayAttempt.originalQuality,
                   title: displayAttempt.originalImpactTitle,
+                  rubric: displayAttempt.originalRubric?.total,
                   impact: displayAttempt.originalImpactScore,
                   consensus: displayAttempt.originalConsensusDelta,
                   pace: displayAttempt.originalCharsPerMinute,
@@ -351,6 +359,7 @@ export default function TargetedPractice({
                   text: attempt.revisedText,
                   quality: attempt.revisedQuality,
                   title: attempt.revisedImpactTitle,
+                  rubric: attempt.revisedRubric?.total,
                   impact: attempt.revisedImpactScore,
                   consensus: attempt.revisedConsensusDelta,
                   pace: attempt.revisedCharsPerMinute,
@@ -366,13 +375,30 @@ export default function TargetedPractice({
                   <p className="mt-4 min-h-28 rounded-2xl bg-slate-50 p-4 text-xs font-semibold leading-6 text-slate-700">“{item.text}”</p>
                   <p className="mt-4 min-h-10 text-xs font-black leading-5 text-slate-950">{item.title}</p>
                   <div className="mt-5 grid grid-cols-3 gap-2">
-                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">综合影响</p><p className="mt-1 text-base font-black text-slate-900">{item.impact}</p></div>
+                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">训练评分</p><p className="mt-1 text-base font-black text-slate-900">{item.rubric ?? "—"}</p></div>
+                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">团队影响</p><p className="mt-1 text-base font-black text-slate-900">{item.impact}</p></div>
                     <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">共识变化</p><p className="mt-1 text-base font-black text-slate-900">{deltaLabel(item.consensus)}</p></div>
-                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">表达速度</p><p className="mt-1 text-base font-black text-slate-900">{item.pace ?? "—"}</p></div>
                   </div>
+                  {item.pace && <p className="mt-3 text-[9px] font-semibold text-slate-400">表达速度约 {item.pace} 字/分钟</p>}
                 </section>
               ))}
             </div>
+
+            {bestAttempt?.revisedRubric && (
+              <section className="rounded-[28px] border border-emerald-100 bg-white p-6 sm:p-8">
+                <div className="flex items-center gap-2 text-xs font-black text-emerald-700"><CheckCircle2 className="size-4" /> 为什么这一版最佳</div>
+                <p className="mt-3 text-sm font-bold leading-7 text-slate-900">{retrainRubricReason(bestAttempt.revisedRubric)}</p>
+                <div className="mt-5 grid gap-3 sm:grid-cols-5">
+                  {RETRAIN_RUBRIC_ITEMS.map((item) => (
+                    <div key={item.key} className="rounded-2xl bg-slate-50 p-4">
+                      <div className="flex items-center justify-between gap-2"><p className="text-[9px] font-black text-slate-500">{item.label}</p><p className="text-xs font-black text-slate-900">{bestAttempt.revisedRubric?.[item.key]}/{item.max}</p></div>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.round(((bestAttempt.revisedRubric?.[item.key] ?? 0) / item.max) * 100)}%` }} /></div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-[10px] font-semibold leading-5 text-slate-400">最佳版本由固定规则计算；AI 的团队影响与共识变化只作为补充证据，不直接决定名次。</p>
+              </section>
+            )}
 
             <section className="rounded-[28px] border border-indigo-100 bg-indigo-50 p-6 sm:p-8">
               <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><TrendingUp className="size-4" /> {challengeComplete ? "下一场训练重点" : "下一次继续优化"}</div>

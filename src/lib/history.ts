@@ -16,6 +16,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isRetrainRubric(value: unknown) {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.listeningIntegration === "number" &&
+    typeof value.conclusionPriority === "number" &&
+    typeof value.evidenceConstraints === "number" &&
+    typeof value.actionValidation === "number" &&
+    typeof value.clarity === "number" &&
+    typeof value.total === "number"
+  );
+}
+
 function isRetrainAttempt(value: unknown): value is RetrainAttempt {
   if (!isObject(value)) return false;
   return (
@@ -39,7 +51,10 @@ function isRetrainAttempt(value: unknown): value is RetrainAttempt {
     (value.originalCharsPerMinute === undefined ||
       typeof value.originalCharsPerMinute === "number") &&
     (value.revisedCharsPerMinute === undefined ||
-      typeof value.revisedCharsPerMinute === "number")
+      typeof value.revisedCharsPerMinute === "number") &&
+    (value.originalRubric === undefined ||
+      isRetrainRubric(value.originalRubric)) &&
+    (value.revisedRubric === undefined || isRetrainRubric(value.revisedRubric))
   );
 }
 

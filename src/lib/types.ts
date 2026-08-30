@@ -230,6 +230,15 @@ export interface SessionReport {
   expression?: ExpressionReport;
 }
 
+export interface RetrainRubricScore {
+  listeningIntegration: number;
+  conclusionPriority: number;
+  evidenceConstraints: number;
+  actionValidation: number;
+  clarity: number;
+  total: number;
+}
+
 export interface RetrainAttempt {
   id: string;
   completedAt: string;
@@ -249,6 +258,8 @@ export interface RetrainAttempt {
   improved: boolean;
   originalCharsPerMinute?: number;
   revisedCharsPerMinute?: number;
+  originalRubric?: RetrainRubricScore;
+  revisedRubric?: RetrainRubricScore;
 }
 
 export interface TrainingRecord {

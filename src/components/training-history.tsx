@@ -284,7 +284,9 @@ export default function TrainingHistory({
                           <div className="flex items-center justify-between gap-3">
                             <p className="text-xs font-black text-slate-900">第 {attempt.targetTurn} 轮</p>
                             <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${attempt.improved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                              综合影响 {attempt.impactDelta > 0 ? `+${attempt.impactDelta}` : attempt.impactDelta}
+                              {attempt.revisedRubric
+                                ? `训练评分 ${attempt.revisedRubric.total}`
+                                : `综合影响 ${attempt.impactDelta > 0 ? `+${attempt.impactDelta}` : attempt.impactDelta}`}
                             </span>
                           </div>
                           <p className="mt-2 line-clamp-2 text-[10px] leading-5 text-slate-500">“{attempt.revisedText}”</p>

@@ -5,7 +5,9 @@ import {
   createRetrainAttempt,
   recommendedRetrainTurn,
   retrainAttemptsForTurn,
+  scoreRetrainText,
 } from "./retrain";
+import { scenarios } from "./scenario";
 import type { TurnAssessment } from "./types";
 
 function assessment(
@@ -105,7 +107,7 @@ describe("targeted practice comparison", () => {
       "retrain-3",
       "retrain-4",
     ]);
-    expect(bestRetrainAttempt(challenge)?.id).toBe("retrain-3");
+    expect(bestRetrainAttempt(challenge)?.id).toBe("retrain-4");
   });
 
   it("recommends the weakest low-impact turn first", () => {
@@ -117,5 +119,35 @@ describe("targeted practice comparison", () => {
     };
 
     expect(recommendedRetrainTurn([stronger, weakest])?.turn).toBe(3);
+  });
+
+  it("ranks a complete integrated answer above a short AI-favored answer", () => {
+    const scenario = scenarios[0];
+    const texts = [
+      "我同意先处理消息提醒和新用户引导，因为它们更快，也更便宜。",
+      "周可提出标准不清、林乔担心长期价值，我建议把标准按优先级排为：先看六周内能否直接改善留存，再看预算效率，最后保留长期价值验证。基于这个顺序，先修复消息提醒并同步优化新用户引导，两周后用提醒到达率和次日留存决定是否继续投入。",
+      "我先整合两位的关注点：程野强调六周内见效，林乔担心长期价值，周可要求统一标准。建议按直接留存影响、交付确定性、预算效率依次判断：第一阶段用8万元在两周内修复消息提醒，并同步启动18万元的新用户引导；第2周检查提醒到达率，第4周检查首日任务完成率和次日留存。若次日改善但七日留存不动，再用剩余24万元做限定人数的学长咨询实验。这样结论、顺序和验证节点都明确。",
+    ];
+    const attempts = texts.map((revisedText, index) =>
+      createRetrainAttempt({
+        targetTurn: 1,
+        originalText: "我建议先统一标准，再比较消息提醒和新用户引导。",
+        revisedText,
+        originalAssessment: assessment("strong", 9, 5),
+        revisedAssessment: assessment(
+          "strong",
+          [20, 18, 1][index],
+          [10, 9, 0][index],
+        ),
+        scenario,
+        completedAt: `2026-08-30T10:0${index}:00.000Z`,
+        id: `calibrated-${index + 1}`,
+      }),
+    );
+
+    expect(scoreRetrainText(texts[2], scenario).total).toBeGreaterThan(
+      scoreRetrainText(texts[0], scenario).total,
+    );
+    expect(bestRetrainAttempt(attempts)?.id).toBe("calibrated-3");
   });
 });

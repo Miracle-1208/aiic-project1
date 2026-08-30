@@ -117,6 +117,10 @@ describe("training history", () => {
     expect(
       parseTrainingHistory(JSON.stringify(updated))[0].retrainAttempts?.[0].id,
     ).toBe("retrain-1");
+    expect(
+      parseTrainingHistory(JSON.stringify(updated))[0].retrainAttempts?.[0]
+        .revisedRubric?.total,
+    ).toBe(attempt.revisedRubric?.total);
   });
 
   it("keeps at most three retrain attempts for each target turn", () => {
