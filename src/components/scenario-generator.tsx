@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { difficultyProfiles, getDifficulty } from "@/lib/scenario";
 import { ScenarioSchema } from "@/lib/scenario-schema";
+import { serializeJsonRequestBody } from "@/lib/json-request";
 import type {
   Scenario,
   ScenarioGeneratorInput,
@@ -75,7 +76,7 @@ export default function ScenarioGenerator({
       const response = await fetch("/api/scenario-generator", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: serializeJsonRequestBody(form),
         signal: controller.signal,
       });
       const data = (await response.json()) as {
@@ -95,8 +96,16 @@ export default function ScenarioGenerator({
         setNotice("当前没有配置百炼 API Key，暂时无法生成新题。");
       } else if (error instanceof Error && error.message === "RATE_LIMITED") {
         setNotice("生成次数较频繁，请稍等一分钟再试。");
+      } else if (error instanceof Error && error.message === "INVALID_REQUEST") {
+        setNotice("题目参数在传输时损坏，请刷新页面后重试。");
+      } else if (error instanceof Error && error.message === "PAYLOAD_TOO_LARGE") {
+        setNotice("岗位或行业内容过长，请精简后重试。");
+      } else if (error instanceof Error && error.message === "INVALID_SCENARIO") {
+        setNotice("AI 返回的题目结构不完整，请重新生成一次。");
+      } else if (error instanceof Error && error.message === "AI_UNAVAILABLE") {
+        setNotice("实时 AI 暂时不可用，请稍后再试。");
       } else {
-        setNotice("这次题目没有生成成功，请调整岗位或行业后重试。");
+        setNotice("这次题目没有生成成功，请刷新页面后重试。");
       }
     } finally {
       window.clearTimeout(timeout);

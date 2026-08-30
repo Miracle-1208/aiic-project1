@@ -1,4 +1,5 @@
 import type { DirectorTurn, GroupState } from "./types";
+import { serializeJsonRequestBody } from "./json-request";
 
 export async function requestDirectorTurn(
   state: GroupState,
@@ -9,7 +10,7 @@ export async function requestDirectorTurn(
   const response = await fetch("/api/director", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: serializeJsonRequestBody({
       scenarioId: state.scenarioId ?? "campus-career-retention",
       scenario: state.scenario,
       difficulty: state.difficulty ?? "standard",

@@ -573,12 +573,15 @@ function Room({
       setRuntimeMode("live");
     } catch (error) {
       setRuntimeMode("demo");
-      const isNotConfigured =
-        error instanceof Error && error.message === "AI_NOT_CONFIGURED";
+      const errorCode = error instanceof Error ? error.message : "AI_UNAVAILABLE";
       setDirectorNotice(
-        isNotConfigured
+        errorCode === "AI_NOT_CONFIGURED"
           ? "当前未配置 API Key，本轮由演示导演继续。"
-          : "实时 AI 暂时未响应，本轮已自动切换到演示导演。",
+          : errorCode === "INVALID_REQUEST"
+            ? "本轮请求在传输时损坏，已由演示导演继续。请刷新页面后重试。"
+            : errorCode === "RATE_LIMITED"
+              ? "本轮请求过于频繁，已由演示导演继续。请稍等一分钟。"
+              : "实时 AI 暂时未响应，本轮已自动切换到演示导演。",
       );
     } finally {
       window.clearTimeout(timeout);
@@ -609,12 +612,15 @@ function Room({
       setRuntimeMode("live");
     } catch (error) {
       setRuntimeMode("demo");
-      const isNotConfigured =
-        error instanceof Error && error.message === "AI_NOT_CONFIGURED";
+      const errorCode = error instanceof Error ? error.message : "AI_UNAVAILABLE";
       setDirectorNotice(
-        isNotConfigured
+        errorCode === "AI_NOT_CONFIGURED"
           ? "当前未配置 API Key，最终报告将使用本地证据规则。"
-          : "实时 AI 暂时未响应，最终报告已自动使用本地证据规则。",
+          : errorCode === "INVALID_REQUEST"
+            ? "最终陈述请求在传输时损坏，报告已改用本地证据规则。请刷新页面后重试。"
+            : errorCode === "RATE_LIMITED"
+              ? "请求过于频繁，最终报告已改用本地证据规则。请稍等一分钟。"
+              : "实时 AI 暂时未响应，最终报告已自动使用本地证据规则。",
       );
     } finally {
       window.clearTimeout(timeout);
