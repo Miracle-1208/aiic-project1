@@ -139,6 +139,17 @@ export interface InfluenceEvent {
   source?: "ai" | "fallback";
 }
 
+export interface VoiceCapture {
+  durationSeconds: number;
+  pauseCount: number;
+}
+
+export interface VoiceTurnMetric extends VoiceCapture {
+  turn: number;
+  characterCount: number;
+  charsPerMinute: number;
+}
+
 export interface GroupState {
   scenarioId: ScenarioId;
   difficulty: TrainingDifficulty;
@@ -151,6 +162,7 @@ export interface GroupState {
   messages: Message[];
   influence: InfluenceEvent[];
   assessments: TurnAssessment[];
+  voiceMetrics: VoiceTurnMetric[];
   scores: ScoreState;
   finalStatement: string;
 }
@@ -163,6 +175,16 @@ export interface DimensionReport {
   summary: string;
 }
 
+export interface ExpressionReport {
+  voiceTurns: number;
+  totalSeconds: number;
+  averageCharsPerMinute: number;
+  pauseCount: number;
+  paceLabel: "偏慢" | "稳健" | "偏快" | "过快";
+  summary: string;
+  suggestion: string;
+}
+
 export interface SessionReport {
   total: number;
   level: string;
@@ -170,6 +192,7 @@ export interface SessionReport {
   strength: string;
   focus: string;
   evidence: string;
+  expression?: ExpressionReport;
 }
 
 export interface TrainingRecord {

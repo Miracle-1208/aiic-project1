@@ -32,6 +32,26 @@ describe("group interview engine", () => {
     expect(next.influence.at(-1)?.title).toBe("建立共同标准");
   });
 
+  it("attaches a completed voice capture to the submitted turn", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "我们先比较用户影响、预算和上线周期。",
+      undefined,
+      { durationSeconds: 12, pauseCount: 2 },
+    );
+
+    expect(next.voiceMetrics).toEqual([
+      expect.objectContaining({
+        turn: 1,
+        durationSeconds: 12,
+        pauseCount: 2,
+      }),
+    ]);
+    expect(next.voiceMetrics[0].characterCount).toBeGreaterThan(0);
+    expect(next.voiceMetrics[0].charsPerMinute).toBeGreaterThan(0);
+  });
+
   it("uses live replies and evidence while keeping score changes bounded", () => {
     const initial = createInitialState();
     const next = applyUserTurn(
@@ -99,6 +119,25 @@ describe("group interview engine", () => {
     expect(state.finalists).toEqual(
       expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
     );
+  });
+
+  it("includes a spoken final statement in the expression evidence", () => {
+    const initial = applyUserTurn(
+      createInitialState(),
+      "我们先按用户影响和上线周期比较。",
+    );
+    const finished = finishSession(
+      initial,
+      "我们依据用户影响和上线周期，选择消息提醒与新用户引导，并保留用户验证控制风险。",
+      undefined,
+      { durationSeconds: 24, pauseCount: 2 },
+    );
+
+    expect(finished.voiceMetrics.at(-1)).toMatchObject({
+      turn: 2,
+      durationSeconds: 24,
+      pauseCount: 2,
+    });
   });
 
   it("creates independent case state for every scenario and difficulty", () => {

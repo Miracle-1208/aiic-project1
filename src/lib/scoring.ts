@@ -1,4 +1,5 @@
 import type { DimensionReport, GroupState, ScoreKey, SessionReport } from "./types";
+import { buildExpressionReport } from "./voice";
 
 const META: Record<ScoreKey, { label: string; max: number; summary: string }> = {
   contribution: {
@@ -58,6 +59,7 @@ export function buildReport(state: GroupState): SessionReport {
   const nextAction = [...assessments]
     .reverse()
     .find((assessment) => assessment.quality !== "strong")?.suggestion;
+  const expression = buildExpressionReport(state.voiceMetrics ?? []);
 
   return {
     total,
@@ -74,5 +76,6 @@ export function buildReport(state: GroupState): SessionReport {
         ? `“${bestAssessment.evidence}”——${bestAssessment.impactDetail}`
         : bestEvent?.detail ??
           "你已经参与讨论；下一轮需要让每次发言都对应一次可观察的团队状态变化。",
+    expression,
   };
 }

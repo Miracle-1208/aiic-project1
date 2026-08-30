@@ -7,21 +7,27 @@ import {
   ChevronRight,
   Clock3,
   Flag,
+  Gauge,
   Lightbulb,
+  Mic,
   RotateCcw,
   Scale,
   Send,
+  Square,
   Sparkles,
   Target,
   TimerReset,
   TrendingUp,
   Users,
+  Volume2,
+  VolumeX,
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import CaseLibrary from "@/components/case-library";
 import TrainingHistory from "@/components/training-history";
+import { useSpeechInput, useSpeechPlayback } from "@/hooks/use-browser-voice";
 import {
   applyUserTurn,
   createInitialState,
@@ -52,6 +58,7 @@ import type {
   TrainingRecord,
   TrainingDifficulty,
   View,
+  VoiceCapture,
 } from "@/lib/types";
 
 type DirectorStatus = {
@@ -488,7 +495,11 @@ function Room({
 }: {
   state: GroupState;
   setState: React.Dispatch<React.SetStateAction<GroupState>>;
-  onFinish: (statement: string, directorTurn?: DirectorTurn) => void;
+  onFinish: (
+    statement: string,
+    directorTurn?: DirectorTurn,
+    voiceCapture?: VoiceCapture,
+  ) => void;
 }) {
   const [input, setInput] = useState("");
   const [finalizing, setFinalizing] = useState(false);
@@ -497,11 +508,35 @@ function Room({
   const [isFinalAnalyzing, setIsFinalAnalyzing] = useState(false);
   const [runtimeMode, setRuntimeMode] = useState<"live" | "demo" | null>(null);
   const [directorNotice, setDirectorNotice] = useState("");
+  const [voiceCapture, setVoiceCapture] = useState<VoiceCapture | null>(null);
+  const [finalVoiceCapture, setFinalVoiceCapture] = useState<VoiceCapture | null>(null);
   const directorStatus = useDirectorStatus();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const spokenMessageCountRef = useRef(state.messages.length);
   const selectedScenario = getScenario(state.scenarioId);
   const difficultyProfile = getDifficulty(state.difficulty);
   const team = getParticipantsForScenario(selectedScenario.id);
+  const speechPlayback = useSpeechPlayback();
+  const speechInput = useSpeechInput({
+    value: input,
+    onChange: setInput,
+    onCapture: (capture) => {
+      setVoiceCapture((current) => ({
+        durationSeconds: (current?.durationSeconds ?? 0) + capture.durationSeconds,
+        pauseCount: (current?.pauseCount ?? 0) + capture.pauseCount,
+      }));
+    },
+  });
+  const finalSpeechInput = useSpeechInput({
+    value: statement,
+    onChange: setStatement,
+    onCapture: (capture) => {
+      setFinalVoiceCapture((current) => ({
+        durationSeconds: (current?.durationSeconds ?? 0) + capture.durationSeconds,
+        pauseCount: (current?.pauseCount ?? 0) + capture.pauseCount,
+      }));
+    },
+  });
 
   useEffect(() => {
     const timer = window.setInterval(() => setState((current) => tick(current)), 1000);
@@ -512,11 +547,35 @@ function Room({
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [isResponding, state.messages.length]);
 
+  useEffect(() => {
+    const newMessages = state.messages.slice(spokenMessageCountRef.current);
+    spokenMessageCountRef.current = state.messages.length;
+    const replyText = newMessages
+      .filter((message) => message.speaker !== "user" && message.speaker !== "system")
+      .map((message) => message.content)
+      .join("。下一位候选人说：");
+    if (replyText) speechPlayback.speak(replyText);
+  }, [speechPlayback, state.messages]);
+
+  const toggleMicrophone = () => {
+    speechPlayback.cancel();
+    if (speechInput.isListening) speechInput.stop();
+    else speechInput.start();
+  };
+
+  const toggleFinalMicrophone = () => {
+    speechPlayback.cancel();
+    if (finalSpeechInput.isListening) finalSpeechInput.stop();
+    else finalSpeechInput.start();
+  };
+
   const send = async () => {
     const userText = input.trim();
-    if (!userText || isResponding) return;
+    if (!userText || isResponding || speechInput.isListening) return;
 
+    const completedVoiceCapture = voiceCapture ?? undefined;
     setInput("");
+    setVoiceCapture(null);
     setIsResponding(true);
     setDirectorNotice("");
 
@@ -538,14 +597,16 @@ function Room({
       );
     } finally {
       window.clearTimeout(timeout);
-      setState((current) => applyUserTurn(current, userText, directorTurn));
+      setState((current) =>
+        applyUserTurn(current, userText, directorTurn, completedVoiceCapture),
+      );
       setIsResponding(false);
     }
   };
 
   const submitFinalStatement = async () => {
     const finalText = statement.trim();
-    if (finalText.length < 20 || isFinalAnalyzing) return;
+    if (finalText.length < 20 || isFinalAnalyzing || finalSpeechInput.isListening) return;
 
     setIsFinalAnalyzing(true);
     setDirectorNotice("");
@@ -573,7 +634,7 @@ function Room({
     } finally {
       window.clearTimeout(timeout);
       setIsFinalAnalyzing(false);
-      onFinish(finalText, directorTurn);
+      onFinish(finalText, directorTurn, finalVoiceCapture ?? undefined);
     }
   };
 
@@ -618,7 +679,22 @@ function Room({
               <p className="text-sm font-black text-slate-950">{selectedScenario.title}</p>
               <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{difficultyProfile.label} · 第 {Math.max(1, state.turn)} 轮</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button
+                type="button"
+                onClick={() => speechPlayback.setMuted((current) => !current)}
+                disabled={!speechPlayback.isSupported}
+                className={`grid size-9 place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-30 ${
+                  speechPlayback.muted
+                    ? "bg-slate-100 text-slate-500"
+                    : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                }`}
+                aria-label={speechPlayback.muted ? "开启 AI 回答朗读" : "关闭 AI 回答朗读"}
+                aria-pressed={!speechPlayback.muted}
+                title={speechPlayback.muted ? "开启 AI 回答朗读" : "关闭 AI 回答朗读"}
+              >
+                {speechPlayback.muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+              </button>
               <div
                 className={`hidden items-center gap-2 rounded-full px-3 py-2 text-[10px] font-bold sm:flex ${
                   effectiveDirectorMode === "live"
@@ -671,7 +747,7 @@ function Room({
             <div className="mx-auto max-w-3xl">
               <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
                 {selectedScenario.quickActions.map((action, index) => (
-                  <button key={action} type="button" onClick={() => setInput(action)} disabled={isResponding} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
+                  <button key={action} type="button" onClick={() => { setInput(action); setVoiceCapture(null); speechInput.clearNotice(); }} disabled={isResponding || speechInput.isListening} className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-semibold text-slate-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
                     {index === 0 ? "建立标准" : index === 1 ? "整合分歧" : "控制时间"}
                   </button>
                 ))}
@@ -679,8 +755,11 @@ function Room({
               <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 transition focus-within:border-indigo-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-indigo-50">
                 <textarea
                   value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  disabled={isResponding}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    speechInput.clearNotice();
+                  }}
+                  disabled={isResponding || speechInput.isListening}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -691,15 +770,49 @@ function Room({
                   placeholder="回应团队，提出标准、质疑或整合方案……"
                   className="max-h-28 min-h-12 flex-1 resize-none bg-transparent px-3 py-2 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400"
                 />
-                <button type="button" onClick={() => void send()} disabled={isResponding || !input.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30" aria-label="发送发言">
+                <button
+                  type="button"
+                  onClick={toggleMicrophone}
+                  disabled={isResponding || !speechInput.isSupported}
+                  className={`grid size-11 shrink-0 place-items-center rounded-xl text-white transition disabled:cursor-not-allowed disabled:opacity-30 ${
+                    speechInput.isListening
+                      ? "animate-pulse bg-rose-500 hover:bg-rose-600"
+                      : "bg-indigo-600 hover:bg-indigo-700"
+                  }`}
+                  aria-label={speechInput.isListening ? "结束语音输入" : "开始语音输入"}
+                  aria-pressed={speechInput.isListening}
+                  title={speechInput.isSupported ? "语音输入" : "当前浏览器不支持语音输入"}
+                >
+                  {speechInput.isListening ? <Square className="size-3.5 fill-current" /> : <Mic className="size-4" />}
+                </button>
+                <button type="button" onClick={() => void send()} disabled={isResponding || speechInput.isListening || !input.trim()} className="grid size-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30" aria-label="发送发言">
                   <Send className="size-4" />
                 </button>
               </div>
               <div className="mt-2 flex items-center justify-between px-1">
-                <p className={`text-[9px] font-semibold ${directorNotice ? "text-amber-600" : "text-slate-400"}`}>
-                  {directorNotice || "Enter 发送 · Shift + Enter 换行"}
+                <p
+                  className={`text-[9px] font-semibold ${
+                    speechInput.isListening
+                      ? "text-rose-600"
+                      : speechInput.notice || directorNotice
+                        ? "text-amber-600"
+                        : voiceCapture
+                          ? "text-indigo-600"
+                          : "text-slate-400"
+                  }`}
+                  aria-live="polite"
+                >
+                  {speechInput.isListening
+                    ? `正在听你说话 · ${speechInput.elapsedSeconds} 秒 · 点击红色按钮结束`
+                    : speechInput.notice ||
+                      directorNotice ||
+                      (voiceCapture
+                        ? `已记录语音 ${voiceCapture.durationSeconds} 秒、${voiceCapture.pauseCount} 次停顿 · 确认文字后发送`
+                        : speechInput.isSupported
+                          ? "点击麦克风口述，确认文字后发送 · 也可以直接打字"
+                          : "当前浏览器仅支持打字发言")}
                 </p>
-                <button type="button" onClick={() => setFinalizing(true)} disabled={state.turn < 2 || isResponding} className="flex items-center gap-1 text-[10px] font-black text-indigo-600 transition hover:text-indigo-800 disabled:cursor-not-allowed disabled:text-slate-300">
+                <button type="button" onClick={() => { speechPlayback.cancel(); setFinalizing(true); }} disabled={state.turn < 2 || isResponding || speechInput.isListening} className="flex items-center gap-1 text-[10px] font-black text-indigo-600 transition hover:text-indigo-800 disabled:cursor-not-allowed disabled:text-slate-300">
                   进入最终陈述 <ChevronRight className="size-3" />
                 </button>
               </div>
@@ -750,20 +863,46 @@ function Room({
                 <h2 className="mt-3 text-2xl font-black tracking-[-0.03em] text-slate-950">代表小组完成最终陈述</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500">建议包含选择标准、最终方案、核心理由和一个主要风险。</p>
               </div>
-              <button type="button" onClick={() => setFinalizing(false)} disabled={isFinalAnalyzing} className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-40">稍后</button>
+              <button type="button" onClick={() => { finalSpeechInput.cancel(); setFinalizing(false); }} disabled={isFinalAnalyzing} className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-40">稍后</button>
             </div>
             <textarea
               value={statement}
-              onChange={(event) => setStatement(event.target.value)}
-              disabled={isFinalAnalyzing}
+              onChange={(event) => {
+                setStatement(event.target.value);
+                finalSpeechInput.clearNotice();
+              }}
+              disabled={isFinalAnalyzing || finalSpeechInput.isListening}
               rows={7}
               autoFocus
               placeholder="我们小组建议优先……我们的选择标准是……"
               className="mt-6 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-7 text-slate-800 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-50"
             />
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={toggleFinalMicrophone}
+                disabled={isFinalAnalyzing || !finalSpeechInput.isSupported}
+                className={`flex h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-xs font-black text-white transition disabled:cursor-not-allowed disabled:opacity-30 ${
+                  finalSpeechInput.isListening
+                    ? "animate-pulse bg-rose-500"
+                    : "bg-indigo-600 hover:bg-indigo-700"
+                }`}
+              >
+                {finalSpeechInput.isListening ? <Square className="size-3 fill-current" /> : <Mic className="size-3.5" />}
+                {finalSpeechInput.isListening ? "结束口述" : "语音口述"}
+              </button>
+              <p className={`text-[10px] font-semibold leading-5 ${finalSpeechInput.notice ? "text-amber-600" : finalSpeechInput.isListening ? "text-rose-600" : "text-slate-400"}`} aria-live="polite">
+                {finalSpeechInput.isListening
+                  ? `正在记录最终陈述 · ${finalSpeechInput.elapsedSeconds} 秒`
+                  : finalSpeechInput.notice ||
+                    (finalVoiceCapture
+                      ? `已记录 ${finalVoiceCapture.durationSeconds} 秒、${finalVoiceCapture.pauseCount} 次停顿`
+                      : "口述内容会先转成文字，确认后再提交")}
+              </p>
+            </div>
             <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setFinalizing(false)} disabled={isFinalAnalyzing} className="h-12 rounded-xl px-5 text-sm font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-40">继续讨论</button>
-              <button type="button" onClick={() => void submitFinalStatement()} disabled={isFinalAnalyzing || statement.trim().length < 20} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 text-sm font-black text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-30">
+              <button type="button" onClick={() => { finalSpeechInput.cancel(); setFinalizing(false); }} disabled={isFinalAnalyzing} className="h-12 rounded-xl px-5 text-sm font-bold text-slate-500 disabled:cursor-not-allowed disabled:opacity-40">继续讨论</button>
+              <button type="button" onClick={() => void submitFinalStatement()} disabled={isFinalAnalyzing || finalSpeechInput.isListening || statement.trim().length < 20} className="flex h-12 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 text-sm font-black text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-30">
                 {isFinalAnalyzing ? "AI 正在分析最终陈述…" : "提交并查看证据报告"} <ArrowRight className="size-4" />
               </button>
             </div>
@@ -876,6 +1015,18 @@ function Report({
               <p className="mt-4 text-lg font-black leading-8 text-slate-950">{report.strength}</p>
               <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-xs leading-6 text-emerald-950">{report.evidence}</div>
             </section>
+            {report.expression && (
+              <section className="rounded-[28px] border border-cyan-100 bg-cyan-50 p-6">
+                <div className="flex items-center gap-2 text-xs font-black text-cyan-800"><Gauge className="size-4" /> 语音表达节奏</div>
+                <div className="mt-4 flex items-end gap-2">
+                  <span className="text-3xl font-black tracking-[-0.04em] text-slate-950">{report.expression.averageCharsPerMinute}</span>
+                  <span className="mb-1 text-xs font-bold text-slate-500">字/分钟 · {report.expression.paceLabel}</span>
+                </div>
+                <p className="mt-3 text-xs leading-6 text-slate-600">{report.expression.summary}</p>
+                <p className="mt-3 rounded-2xl bg-white/80 p-4 text-xs font-semibold leading-6 text-cyan-950">建议：{report.expression.suggestion}</p>
+                <p className="mt-3 text-[9px] leading-4 text-cyan-700/70">数据来自浏览器识别时长与文字结果，用于训练参考，不代表声学测评。</p>
+              </section>
+            )}
             <section className="rounded-[28px] border border-indigo-100 bg-indigo-50 p-6">
               <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><TimerReset className="size-4" /> 下一轮只练一件事</div>
               <p className="mt-4 text-sm font-bold leading-7 text-indigo-950">{report.focus}</p>
@@ -935,9 +1086,13 @@ export default function GroupLab() {
     setView("briefing");
   };
 
-  const complete = (statement: string, directorTurn?: DirectorTurn) => {
+  const complete = (
+    statement: string,
+    directorTurn?: DirectorTurn,
+    voiceCapture?: VoiceCapture,
+  ) => {
     if (statement.trim().length < 20) return;
-    const completedState = finishSession(state, statement, directorTurn);
+    const completedState = finishSession(state, statement, directorTurn, voiceCapture);
     const record = createTrainingRecord(completedState);
     setState(completedState);
     setHistory((current) => {

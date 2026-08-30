@@ -15,6 +15,7 @@ import type {
   SpeakerId,
   TrainingDifficulty,
   TurnAssessment,
+  VoiceCapture,
 } from "./types";
 
 const SCORE_MAX: ScoreState = {
@@ -536,6 +537,7 @@ export function createInitialState(
     ),
     influence: [],
     assessments: [],
+    voiceMetrics: [],
     scores: {
       contribution: 5,
       progress: 4,
@@ -547,10 +549,28 @@ export function createInitialState(
   };
 }
 
+function createVoiceMetric(
+  text: string,
+  turn: number,
+  voiceCapture?: VoiceCapture,
+) {
+  if (!voiceCapture) return undefined;
+  const durationSeconds = Math.max(1, Math.round(voiceCapture.durationSeconds));
+  const characterCount = text.replace(/\s/g, "").length;
+  return {
+    turn,
+    durationSeconds,
+    pauseCount: Math.max(0, Math.round(voiceCapture.pauseCount)),
+    characterCount,
+    charsPerMinute: Math.round((characterCount / durationSeconds) * 60),
+  };
+}
+
 export function applyUserTurn(
   state: GroupState,
   rawText: string,
   directorTurn?: DirectorTurn,
+  voiceCapture?: VoiceCapture,
 ): GroupState {
   const text = rawText.trim();
   if (!text) return state;
@@ -582,6 +602,7 @@ export function applyUserTurn(
     difficulty,
     directorTurn?.replies,
   );
+  const voiceMetric = createVoiceMetric(text, turn, voiceCapture);
   const inferredCriteria =
     intent === "criteria" ? extractCriteria(text, selectedScenario) : [];
   const criteria = unique([
@@ -618,6 +639,9 @@ export function applyUserTurn(
     messages: [...state.messages, userMessage, ...aiMessages],
     influence: [...state.influence, eventFromAssessment(assessment)],
     assessments: [...(state.assessments ?? []), assessment],
+    voiceMetrics: voiceMetric
+      ? [...(state.voiceMetrics ?? []), voiceMetric]
+      : (state.voiceMetrics ?? []),
     scores: clampScores(state.scores, assessment.scoreDeltas),
   };
 }
@@ -626,6 +650,7 @@ export function finishSession(
   state: GroupState,
   rawStatement: string,
   directorTurn?: DirectorTurn,
+  voiceCapture?: VoiceCapture,
 ): GroupState {
   const statement = rawStatement.trim();
   if (!statement) return state;
@@ -642,6 +667,7 @@ export function finishSession(
     difficulty,
     directorTurn?.assessment,
   );
+  const voiceMetric = createVoiceMetric(statement, turn, voiceCapture);
 
   const finalOptions = unique([
     ...state.finalists,
@@ -670,6 +696,9 @@ export function finishSession(
     ],
     influence: [...state.influence, eventFromAssessment(assessment)],
     assessments: [...(state.assessments ?? []), assessment],
+    voiceMetrics: voiceMetric
+      ? [...(state.voiceMetrics ?? []), voiceMetric]
+      : (state.voiceMetrics ?? []),
     scores: clampScores(state.scores, assessment.scoreDeltas),
   };
 }
