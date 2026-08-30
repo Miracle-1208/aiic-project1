@@ -2,6 +2,7 @@ import { DIFFICULTY_IDS, SCENARIO_IDS } from "./scenario";
 import { buildReport } from "./scoring";
 import type {
   GroupState,
+  RetrainAttempt,
   ScoreKey,
   TrainingRecord,
 } from "./types";
@@ -11,6 +12,33 @@ const MAX_HISTORY_RECORDS = 50;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRetrainAttempt(value: unknown): value is RetrainAttempt {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.completedAt === "string" &&
+    !Number.isNaN(Date.parse(value.completedAt)) &&
+    typeof value.targetTurn === "number" &&
+    typeof value.originalText === "string" &&
+    typeof value.revisedText === "string" &&
+    ["strong", "developing", "weak"].includes(String(value.originalQuality)) &&
+    ["strong", "developing", "weak"].includes(String(value.revisedQuality)) &&
+    typeof value.originalImpactTitle === "string" &&
+    typeof value.revisedImpactTitle === "string" &&
+    typeof value.originalImpactScore === "number" &&
+    typeof value.revisedImpactScore === "number" &&
+    typeof value.impactDelta === "number" &&
+    typeof value.originalConsensusDelta === "number" &&
+    typeof value.revisedConsensusDelta === "number" &&
+    typeof value.suggestion === "string" &&
+    typeof value.improved === "boolean" &&
+    (value.originalCharsPerMinute === undefined ||
+      typeof value.originalCharsPerMinute === "number") &&
+    (value.revisedCharsPerMinute === undefined ||
+      typeof value.revisedCharsPerMinute === "number")
+  );
 }
 
 function isTrainingRecord(value: unknown): value is TrainingRecord {
@@ -42,7 +70,10 @@ function isTrainingRecord(value: unknown): value is TrainingRecord {
     ) &&
     typeof report.strength === "string" &&
     typeof report.focus === "string" &&
-    typeof report.evidence === "string"
+    typeof report.evidence === "string" &&
+    (value.retrainAttempts === undefined ||
+      (Array.isArray(value.retrainAttempts) &&
+        value.retrainAttempts.every(isRetrainAttempt)))
   );
 }
 
@@ -85,6 +116,24 @@ export function appendTrainingRecord(
     .slice(0, MAX_HISTORY_RECORDS);
 }
 
+export function appendRetrainAttempt(
+  records: TrainingRecord[],
+  recordId: string,
+  attempt: RetrainAttempt,
+): TrainingRecord[] {
+  return records.map((record) =>
+    record.id === recordId
+      ? {
+          ...record,
+          retrainAttempts: [
+            attempt,
+            ...(record.retrainAttempts ?? []).filter((item) => item.id !== attempt.id),
+          ].slice(0, 20),
+        }
+      : record,
+  );
+}
+
 export function persistTrainingHistory(
   records: TrainingRecord[],
   storage: Pick<Storage, "setItem"> | undefined = browserStorage(),
@@ -113,6 +162,7 @@ export function createTrainingRecord(
     finalStatement: state.finalStatement,
     influence: state.influence,
     report: buildReport(state),
+    retrainAttempts: [],
   };
 }
 

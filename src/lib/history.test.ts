@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createInitialState, finishSession } from "./engine";
 import {
   TRAINING_HISTORY_KEY,
+  appendRetrainAttempt,
   appendTrainingRecord,
   createTrainingRecord,
   dimensionPercent,
@@ -11,6 +12,7 @@ import {
   readTrainingHistory,
   weakestDimension,
 } from "./history";
+import { createRetrainAttempt } from "./retrain";
 
 function completedState() {
   return finishSession(
@@ -82,5 +84,36 @@ describe("training history", () => {
     expect(dimensionPercent(record, "progress")).toBeGreaterThanOrEqual(0);
     expect(dimensionPercent(record, "progress")).toBeLessThanOrEqual(100);
     expect(weakestDimension([record])?.key).toBeTruthy();
+  });
+
+  it("stores a targeted-practice result inside its source session", () => {
+    const state = completedState();
+    const record = createTrainingRecord(
+      state,
+      "2026-08-30T08:00:00.000Z",
+      "session-1",
+    );
+    const originalAssessment = state.assessments[0];
+    const revisedAssessment = {
+      ...originalAssessment,
+      id: "revised-assessment",
+      quality: "strong" as const,
+      consensusDelta: originalAssessment.consensusDelta + 3,
+    };
+    const attempt = createRetrainAttempt({
+      targetTurn: originalAssessment.turn,
+      originalText: originalAssessment.evidence,
+      revisedText: "重新组织后的发言",
+      originalAssessment,
+      revisedAssessment,
+      completedAt: "2026-08-30T09:00:00.000Z",
+      id: "retrain-1",
+    });
+    const updated = appendRetrainAttempt([record], record.id, attempt);
+
+    expect(updated[0].retrainAttempts).toHaveLength(1);
+    expect(
+      parseTrainingHistory(JSON.stringify(updated))[0].retrainAttempts?.[0].id,
+    ).toBe("retrain-1");
   });
 });

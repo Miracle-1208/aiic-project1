@@ -14,6 +14,7 @@ import type {
   ScenarioId,
   SpeakerId,
   TrainingDifficulty,
+  TurnSnapshot,
   TurnAssessment,
   VoiceCapture,
 } from "./types";
@@ -538,6 +539,7 @@ export function createInitialState(
     influence: [],
     assessments: [],
     voiceMetrics: [],
+    turnSnapshots: [],
     scores: {
       contribution: 5,
       progress: 4,
@@ -545,6 +547,52 @@ export function createInitialState(
       conflict: 2,
       structure: 3,
     },
+    finalStatement: "",
+  };
+}
+
+function createTurnSnapshot(state: GroupState, targetTurn: number): TurnSnapshot {
+  return {
+    targetTurn,
+    turn: state.turn,
+    timeLeft: state.timeLeft,
+    consensus: state.consensus,
+    criteria: [...state.criteria],
+    finalists: [...state.finalists],
+    conflict: state.conflict,
+    messages: [...state.messages],
+    influence: [...state.influence],
+    assessments: [...(state.assessments ?? [])],
+    voiceMetrics: [...(state.voiceMetrics ?? [])],
+    scores: { ...state.scores },
+  };
+}
+
+export function restoreTurnSnapshot(
+  completedState: GroupState,
+  targetTurn: number,
+): GroupState | undefined {
+  const snapshot = (completedState.turnSnapshots ?? []).find(
+    (item) => item.targetTurn === targetTurn,
+  );
+  if (!snapshot) return undefined;
+  return {
+    scenarioId: completedState.scenarioId,
+    difficulty: completedState.difficulty,
+    turn: snapshot.turn,
+    timeLeft: snapshot.timeLeft,
+    consensus: snapshot.consensus,
+    criteria: [...snapshot.criteria],
+    finalists: [...snapshot.finalists],
+    conflict: snapshot.conflict,
+    messages: [...snapshot.messages],
+    influence: [...snapshot.influence],
+    assessments: [...snapshot.assessments],
+    voiceMetrics: [...snapshot.voiceMetrics],
+    turnSnapshots: (completedState.turnSnapshots ?? []).filter(
+      (item) => item.targetTurn < targetTurn,
+    ),
+    scores: { ...snapshot.scores },
     finalStatement: "",
   };
 }
@@ -642,6 +690,10 @@ export function applyUserTurn(
     voiceMetrics: voiceMetric
       ? [...(state.voiceMetrics ?? []), voiceMetric]
       : (state.voiceMetrics ?? []),
+    turnSnapshots: [
+      ...(state.turnSnapshots ?? []),
+      createTurnSnapshot(state, turn),
+    ],
     scores: clampScores(state.scores, assessment.scoreDeltas),
   };
 }
@@ -699,6 +751,10 @@ export function finishSession(
     voiceMetrics: voiceMetric
       ? [...(state.voiceMetrics ?? []), voiceMetric]
       : (state.voiceMetrics ?? []),
+    turnSnapshots: [
+      ...(state.turnSnapshots ?? []),
+      createTurnSnapshot(state, turn),
+    ],
     scores: clampScores(state.scores, assessment.scoreDeltas),
   };
 }

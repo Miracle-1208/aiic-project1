@@ -145,6 +145,10 @@ export default function TrainingHistory({
   const average = records.length
     ? Math.round(records.reduce((sum, record) => sum + record.report.total, 0) / records.length)
     : 0;
+  const retrainCount = records.reduce(
+    (sum, record) => sum + (record.retrainAttempts?.length ?? 0),
+    0,
+  );
 
   return (
     <main className="min-h-screen bg-[#f5f7fa]">
@@ -166,9 +170,10 @@ export default function TrainingHistory({
             </button>
           </div>
 
-          <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {[
               ["累计训练", `${records.length} 场`, "完成一次报告即自动记录"],
+              ["专项重练", `${retrainCount} 次`, "针对关键轮次反复优化"],
               ["最近得分", `${records[0].report.total} 分`, records[0].report.level],
               ["平均得分", `${average} 分`, "基于全部本地记录"],
               ["当前短板", weakest?.label ?? "待训练", weakest ? `${weakest.score} / ${weakest.max}` : "完成后生成"],
@@ -220,7 +225,7 @@ export default function TrainingHistory({
                       >
                         <span className="min-w-0">
                           <span className="block truncate text-xs font-black text-slate-900">{itemScenario.title}</span>
-                          <span className="mt-1 block text-[10px] font-semibold text-slate-400">{formatDate(record.completedAt)} · {itemDifficulty.label} · {record.turns} 轮</span>
+                          <span className="mt-1 block text-[10px] font-semibold text-slate-400">{formatDate(record.completedAt)} · {itemDifficulty.label} · {record.turns} 轮{record.retrainAttempts?.length ? ` · 专项 ${record.retrainAttempts.length} 次` : ""}</span>
                         </span>
                         <span className="flex items-center gap-3">
                           <span className="text-lg font-black text-slate-950">{record.report.total}</span>
@@ -269,6 +274,26 @@ export default function TrainingHistory({
                   <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><Target className="size-4" /> 下一次只练一件事</div>
                   <p className="mt-3 text-sm font-bold leading-7 text-indigo-950">{selected.report.focus}</p>
                 </section>
+
+                {selected.retrainAttempts?.length ? (
+                  <section className="rounded-[28px] border border-emerald-100 bg-emerald-50 p-6">
+                    <div className="flex items-center gap-2 text-xs font-black text-emerald-700"><TrendingUp className="size-4" /> 关键轮次重练</div>
+                    <div className="mt-4 space-y-3">
+                      {selected.retrainAttempts.slice(0, 4).map((attempt) => (
+                        <div key={attempt.id} className="rounded-2xl bg-white/80 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs font-black text-slate-900">第 {attempt.targetTurn} 轮</p>
+                            <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${attempt.improved ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                              综合影响 {attempt.impactDelta > 0 ? `+${attempt.impactDelta}` : attempt.impactDelta}
+                            </span>
+                          </div>
+                          <p className="mt-2 line-clamp-2 text-[10px] leading-5 text-slate-500">“{attempt.revisedText}”</p>
+                          <p className="mt-2 text-[9px] font-semibold text-slate-400">{formatDate(attempt.completedAt)} · {attempt.revisedImpactTitle}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
 
                 <section className="rounded-[28px] border border-slate-200 bg-white p-6">
                   <p className="text-xs font-black text-slate-900">最终选择</p>

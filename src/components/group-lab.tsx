@@ -26,8 +26,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import CaseLibrary from "@/components/case-library";
+import TargetedPractice from "@/components/targeted-practice";
 import TrainingHistory from "@/components/training-history";
 import { useSpeechInput, useSpeechPlayback } from "@/hooks/use-browser-voice";
+import { requestDirectorTurn } from "@/lib/director-client";
 import {
   applyUserTurn,
   createInitialState,
@@ -37,6 +39,7 @@ import {
 } from "@/lib/engine";
 import {
   appendTrainingRecord,
+  appendRetrainAttempt,
   createTrainingRecord,
   persistTrainingHistory,
   readTrainingHistory,
@@ -53,6 +56,7 @@ import type {
   GroupState,
   Message,
   Participant,
+  RetrainAttempt,
   Scenario,
   ScenarioId,
   TrainingRecord,
@@ -93,42 +97,6 @@ function useDirectorStatus(): DirectorStatus {
   }, []);
 
   return status;
-}
-
-async function requestDirectorTurn(
-  state: GroupState,
-  userText: string,
-  phase: "discussion" | "final_statement",
-  signal: AbortSignal,
-): Promise<DirectorTurn> {
-  const response = await fetch("/api/director", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      scenarioId: state.scenarioId ?? "campus-career-retention",
-      difficulty: state.difficulty ?? "standard",
-      phase,
-      userText,
-      state: {
-        turn: state.turn,
-        timeLeft: state.timeLeft,
-        consensus: state.consensus,
-        criteria: state.criteria,
-        finalists: state.finalists,
-        conflict: state.conflict,
-        messages: state.messages.slice(-16).map((message) => ({
-          speaker: message.speaker,
-          content: message.content,
-        })),
-      },
-    }),
-    signal,
-  });
-  const data = (await response.json()) as DirectorTurn & { code?: string };
-  if (!response.ok || !data.replies?.length || !data.assessment) {
-    throw new Error(data.code || "AI_UNAVAILABLE");
-  }
-  return data;
 }
 
 function Brand() {
@@ -931,11 +899,13 @@ function Report({
   onRestart,
   onLibrary,
   onHistory,
+  onRetrain,
 }: {
   state: GroupState;
   onRestart: () => void;
   onLibrary: () => void;
   onHistory: () => void;
+  onRetrain: (turn: number) => void;
 }) {
   const report = useMemo(() => buildReport(state), [state]);
   const selectedScenario = getScenario(state.scenarioId);
@@ -1003,6 +973,17 @@ function Report({
                         下一步：{event.suggestion}
                       </p>
                     )}
+                    {(state.turnSnapshots ?? []).some(
+                      (snapshot) => snapshot.targetTurn === event.turn,
+                    ) && (
+                      <button
+                        type="button"
+                        onClick={() => onRetrain(event.turn)}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1.5 text-[10px] font-black text-indigo-700 transition hover:bg-indigo-100"
+                      >
+                        <RotateCcw className="size-3" /> 重练这一轮
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1066,6 +1047,8 @@ export default function GroupLab() {
     createInitialState("campus-career-retention", "standard"),
   );
   const [history, setHistory] = useState<TrainingRecord[]>(() => readTrainingHistory());
+  const [activeRecordId, setActiveRecordId] = useState("");
+  const [retrainTurn, setRetrainTurn] = useState<number | null>(null);
   const selectedScenario = getScenario(selectedScenarioId);
   const team = getParticipantsForScenario(selectedScenarioId);
 
@@ -1095,6 +1078,7 @@ export default function GroupLab() {
     const completedState = finishSession(state, statement, directorTurn, voiceCapture);
     const record = createTrainingRecord(completedState);
     setState(completedState);
+    setActiveRecordId(record.id);
     setHistory((current) => {
       const next = appendTrainingRecord(current, record);
       persistTrainingHistory(next);
@@ -1108,6 +1092,15 @@ export default function GroupLab() {
     setDifficulty(record.difficulty);
     setState(createInitialState(record.scenarioId, record.difficulty));
     setView("briefing");
+  };
+
+  const saveRetrainAttempt = (attempt: RetrainAttempt) => {
+    if (!activeRecordId) return;
+    setHistory((current) => {
+      const next = appendRetrainAttempt(current, activeRecordId, attempt);
+      persistTrainingHistory(next);
+      return next;
+    });
   };
 
   if (view === "welcome") {
@@ -1157,6 +1150,20 @@ export default function GroupLab() {
         onRestart={restart}
         onLibrary={() => setView("library")}
         onHistory={() => setView("history")}
+        onRetrain={(turn) => {
+          setRetrainTurn(turn);
+          setView("retrain");
+        }}
+      />
+    );
+  }
+  if (view === "retrain" && retrainTurn !== null) {
+    return (
+      <TargetedPractice
+        state={state}
+        targetTurn={retrainTurn}
+        onBack={() => setView("report")}
+        onSaved={saveRetrainAttempt}
       />
     );
   }

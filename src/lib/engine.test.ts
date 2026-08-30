@@ -6,6 +6,7 @@ import {
   createInitialState,
   finishSession,
   formatTime,
+  restoreTurnSnapshot,
 } from "./engine";
 
 describe("group interview engine", () => {
@@ -50,6 +51,32 @@ describe("group interview engine", () => {
     ]);
     expect(next.voiceMetrics[0].characterCount).toBeGreaterThan(0);
     expect(next.voiceMetrics[0].charsPerMinute).toBeGreaterThan(0);
+  });
+
+  it("restores the exact discussion state before a selected turn", () => {
+    const initial = createInitialState();
+    const first = applyUserTurn(
+      initial,
+      "我们先统一用户影响、预算和周期三项标准。",
+    );
+    const second = applyUserTurn(
+      first,
+      "我建议结合大家意见，先比较两个最可行方案。",
+    );
+    const restored = restoreTurnSnapshot(second, 2);
+
+    expect(second.turnSnapshots.map((snapshot) => snapshot.targetTurn)).toEqual([
+      1,
+      2,
+    ]);
+    expect(restored).toMatchObject({
+      turn: 1,
+      consensus: first.consensus,
+      conflict: first.conflict,
+      finalStatement: "",
+    });
+    expect(restored?.messages).toEqual(first.messages);
+    expect(restored?.turnSnapshots).toHaveLength(1);
   });
 
   it("uses live replies and evidence while keeping score changes bounded", () => {

@@ -1,4 +1,11 @@
-export type View = "welcome" | "library" | "briefing" | "room" | "report" | "history";
+export type View =
+  | "welcome"
+  | "library"
+  | "briefing"
+  | "room"
+  | "report"
+  | "retrain"
+  | "history";
 
 export type ScenarioId =
   | "campus-career-retention"
@@ -150,6 +157,21 @@ export interface VoiceTurnMetric extends VoiceCapture {
   charsPerMinute: number;
 }
 
+export interface TurnSnapshot {
+  targetTurn: number;
+  turn: number;
+  timeLeft: number;
+  consensus: number;
+  criteria: string[];
+  finalists: string[];
+  conflict: string;
+  messages: Message[];
+  influence: InfluenceEvent[];
+  assessments: TurnAssessment[];
+  voiceMetrics: VoiceTurnMetric[];
+  scores: ScoreState;
+}
+
 export interface GroupState {
   scenarioId: ScenarioId;
   difficulty: TrainingDifficulty;
@@ -163,6 +185,7 @@ export interface GroupState {
   influence: InfluenceEvent[];
   assessments: TurnAssessment[];
   voiceMetrics: VoiceTurnMetric[];
+  turnSnapshots: TurnSnapshot[];
   scores: ScoreState;
   finalStatement: string;
 }
@@ -195,6 +218,27 @@ export interface SessionReport {
   expression?: ExpressionReport;
 }
 
+export interface RetrainAttempt {
+  id: string;
+  completedAt: string;
+  targetTurn: number;
+  originalText: string;
+  revisedText: string;
+  originalQuality: AssessmentQuality;
+  revisedQuality: AssessmentQuality;
+  originalImpactTitle: string;
+  revisedImpactTitle: string;
+  originalImpactScore: number;
+  revisedImpactScore: number;
+  impactDelta: number;
+  originalConsensusDelta: number;
+  revisedConsensusDelta: number;
+  suggestion: string;
+  improved: boolean;
+  originalCharsPerMinute?: number;
+  revisedCharsPerMinute?: number;
+}
+
 export interface TrainingRecord {
   id: string;
   completedAt: string;
@@ -206,4 +250,5 @@ export interface TrainingRecord {
   finalStatement: string;
   influence: InfluenceEvent[];
   report: SessionReport;
+  retrainAttempts?: RetrainAttempt[];
 }
