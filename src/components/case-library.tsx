@@ -9,12 +9,13 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   TrendingUp,
   Users,
 } from "lucide-react";
 
 import { difficultyProfiles, getDifficulty, scenarios } from "@/lib/scenario";
-import type { ScenarioId, TrainingDifficulty } from "@/lib/types";
+import type { Scenario, TrainingDifficulty } from "@/lib/types";
 
 function ScenarioIcon({ category }: { category: string }) {
   if (category === "危机决策") return <ShieldAlert className="size-5" />;
@@ -68,16 +69,23 @@ export default function CaseLibrary({
   difficulty,
   onDifficultyChange,
   onSelect,
+  customScenarios,
+  onCreate,
+  onDelete,
   onHistory,
   onBack,
 }: {
   difficulty: TrainingDifficulty;
   onDifficultyChange: (difficulty: TrainingDifficulty) => void;
-  onSelect: (scenarioId: ScenarioId) => void;
+  onSelect: (scenario: Scenario) => void;
+  customScenarios: Scenario[];
+  onCreate: () => void;
+  onDelete: (scenarioId: Scenario["id"]) => void;
   onHistory: () => void;
   onBack: () => void;
 }) {
   const difficultyProfile = getDifficulty(difficulty);
+  const availableScenarios = [...scenarios, ...customScenarios];
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f6f7fb]">
@@ -129,19 +137,25 @@ export default function CaseLibrary({
           </div>
         </div>
 
-        <div className="mt-12 flex items-center justify-between gap-4">
+        <div className="mt-12 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-[10px] font-black tracking-[0.18em] text-indigo-600">CASE LIBRARY</p>
             <h2 className="mt-2 text-2xl font-black tracking-[-0.03em] text-slate-950">群面案例库</h2>
           </div>
-          <div className="hidden items-center gap-5 text-[11px] font-bold text-slate-400 sm:flex">
-            <span className="flex items-center gap-1.5"><Check className="size-3.5 text-emerald-500" /> 无需登录</span>
-            <span className="flex items-center gap-1.5"><Check className="size-3.5 text-emerald-500" /> 每轮证据评分</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="hidden items-center gap-5 text-[11px] font-bold text-slate-400 lg:flex">
+              <span className="flex items-center gap-1.5"><Check className="size-3.5 text-emerald-500" /> 无需登录</span>
+              <span className="flex items-center gap-1.5"><Check className="size-3.5 text-emerald-500" /> 每轮证据评分</span>
+            </div>
+            <button type="button" onClick={onCreate} className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-5 text-xs font-black text-white shadow-lg shadow-indigo-600/20 transition hover:-translate-y-0.5 hover:bg-indigo-700">
+              <Sparkles className="size-4" /> AI 生成岗位专属题
+            </button>
           </div>
         </div>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-3">
-          {scenarios.map((item) => {
+          {availableScenarios.map((item) => {
+            const isCustom = item.id.startsWith("custom-");
             const minutes = Math.round(
               (item.timeLimit * difficultyProfile.timeMultiplier) / 60,
             );
@@ -155,9 +169,25 @@ export default function CaseLibrary({
                   <div className="grid size-11 place-items-center rounded-2xl text-white shadow-lg" style={{ backgroundColor: item.accent }}>
                     <ScenarioIcon category={item.category} />
                   </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1.5 text-[9px] font-black tracking-[0.12em] text-slate-500">
-                    {item.caseNumber}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {isCustom && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm("删除这道自定义题目吗？训练历史不会被删除。")) {
+                            onDelete(item.id);
+                          }
+                        }}
+                        className="grid size-8 place-items-center rounded-full bg-rose-50 text-rose-500 transition hover:bg-rose-100"
+                        aria-label={`删除${item.title}`}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                    <span className="rounded-full bg-slate-100 px-3 py-1.5 text-[9px] font-black tracking-[0.12em] text-slate-500">
+                      {item.caseNumber}
+                    </span>
+                  </div>
                 </div>
                 <p className="mt-5 text-[10px] font-black tracking-[0.14em]" style={{ color: item.accent }}>
                   {item.category}
@@ -182,7 +212,7 @@ export default function CaseLibrary({
                   <p className="mb-3 truncate text-[10px] font-semibold text-slate-400">{item.company}</p>
                   <button
                     type="button"
-                    onClick={() => onSelect(item.id)}
+                    onClick={() => onSelect(item)}
                     className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition group-hover:bg-indigo-600"
                   >
                     选择此题 · {difficultyProfile.shortLabel}

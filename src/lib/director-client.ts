@@ -11,6 +11,7 @@ export async function requestDirectorTurn(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       scenarioId: state.scenarioId ?? "campus-career-retention",
+      scenario: state.scenario,
       difficulty: state.difficulty ?? "standard",
       phase,
       userText,

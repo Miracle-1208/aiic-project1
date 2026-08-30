@@ -123,10 +123,12 @@ function includesAny(text: string, words: string[]) {
 
 export function classifyIntent(
   rawText: string,
-  scenarioId: ScenarioId = "campus-career-retention",
+  scenarioOrId: Scenario | ScenarioId = "campus-career-retention",
 ): Intent {
   const text = rawText.toLowerCase();
-  const optionAliases = Object.values(getScenario(scenarioId).optionAliases)
+  const selectedScenario =
+    typeof scenarioOrId === "string" ? getScenario(scenarioOrId) : scenarioOrId;
+  const optionAliases = Object.values(selectedScenario.optionAliases)
     .flat()
     .map((alias) => alias.toLowerCase());
 
@@ -423,10 +425,14 @@ function materializeAssessment(
   difficulty: TrainingDifficulty,
   supplied?: DirectorAssessment,
 ): TurnAssessment {
-  const assessment = supplied ?? fallback;
+  const suppliedEvidence = supplied?.evidence.trim() ?? "";
+  const suppliedIsGrounded = Boolean(
+    supplied && suppliedEvidence && text.includes(suppliedEvidence),
+  );
+  const assessment = suppliedIsGrounded && supplied ? supplied : fallback;
   const allowedOptions = new Set(selectedScenario.options.map((option) => option.title));
   const difficultyProfile = getDifficulty(difficulty);
-  const source = supplied ? "ai" : "fallback";
+  const source = suppliedIsGrounded ? "ai" : "fallback";
   const evidence = text.includes(assessment.evidence.trim())
     ? assessment.evidence.trim()
     : text.slice(0, 100);
@@ -514,13 +520,15 @@ function eventFromAssessment(assessment: TurnAssessment): InfluenceEvent {
 }
 
 export function createInitialState(
-  scenarioId: ScenarioId = "campus-career-retention",
+  scenarioOrId: Scenario | ScenarioId = "campus-career-retention",
   difficulty: TrainingDifficulty = "standard",
 ): GroupState {
-  const selectedScenario = getScenario(scenarioId);
+  const selectedScenario =
+    typeof scenarioOrId === "string" ? getScenario(scenarioOrId) : scenarioOrId;
   const difficultyProfile = getDifficulty(difficulty);
   return {
     scenarioId: selectedScenario.id,
+    scenario: selectedScenario,
     difficulty: difficultyProfile.id,
     turn: 0,
     timeLeft:
@@ -578,6 +586,7 @@ export function restoreTurnSnapshot(
   if (!snapshot) return undefined;
   return {
     scenarioId: completedState.scenarioId,
+    scenario: completedState.scenario ?? getScenario(completedState.scenarioId),
     difficulty: completedState.difficulty,
     turn: snapshot.turn,
     timeLeft: snapshot.timeLeft,
@@ -625,11 +634,11 @@ export function applyUserTurn(
 
   const scenarioId = state.scenarioId ?? "campus-career-retention";
   const difficulty = state.difficulty ?? "standard";
-  const selectedScenario = getScenario(scenarioId);
+  const selectedScenario = state.scenario ?? getScenario(scenarioId);
   const turn = state.turn + 1;
   const fallback = fallbackAssessment(
     text,
-    classifyIntent(text, scenarioId),
+    classifyIntent(text, selectedScenario),
     selectedScenario,
   );
   const assessment = materializeAssessment(
@@ -709,7 +718,7 @@ export function finishSession(
 
   const scenarioId = state.scenarioId ?? "campus-career-retention";
   const difficulty = state.difficulty ?? "standard";
-  const selectedScenario = getScenario(scenarioId);
+  const selectedScenario = state.scenario ?? getScenario(scenarioId);
   const turn = state.turn + 1;
   const assessment = materializeAssessment(
     statement,

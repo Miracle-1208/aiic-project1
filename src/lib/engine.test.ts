@@ -8,6 +8,8 @@ import {
   formatTime,
   restoreTurnSnapshot,
 } from "./engine";
+import { scenarios } from "./scenario";
+import type { Scenario } from "./types";
 
 describe("group interview engine", () => {
   it("classifies the collaboration actions that drive the group state", () => {
@@ -178,6 +180,24 @@ describe("group interview engine", () => {
     expect(guided.consensus).toBeGreaterThan(pressure.consensus);
   });
 
+  it("uses a complete custom scenario throughout classification and state changes", () => {
+    const customScenario: Scenario = {
+      ...scenarios[0],
+      id: "custom-product-role",
+      title: "定制岗位题",
+      optionAliases: {
+        ...scenarios[0].optionAliases,
+        notification: ["专属提醒方案"],
+      },
+    };
+    const initial = createInitialState(customScenario, "standard");
+    const next = applyUserTurn(initial, "我建议选择专属提醒方案。" );
+
+    expect(initial.scenario.title).toBe("定制岗位题");
+    expect(next.finalists).toContain("修复消息提醒");
+    expect(next.messages.at(-1)?.content).toBeTruthy();
+  });
+
   it("extracts finalists from the selected case instead of the default case", () => {
     const initial = createInitialState("ai-study-beta", "standard");
     const next = applyUserTurn(
@@ -272,6 +292,42 @@ describe("group interview engine", () => {
     expect(next.finalists).toEqual(
       expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
     );
+  });
+
+  it("falls back to grounded local assessment when AI evidence is not user text", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "我们先按用户影响、预算和上线周期建立评价标准。",
+      {
+        replies: [{ speaker: "zhou", content: "可以继续比较三个维度的优先级。" }],
+        assessment: {
+          intent: "challenge",
+          quality: "strong",
+          evidence: "这句话并不是用户说的",
+          impactTitle: "错误评估",
+          impactDetail: "错误地引用了其他内容。",
+          suggestion: "继续说明理由。",
+          criteriaAdded: [],
+          finalistsAdded: [],
+          unresolvedConflict: "",
+          consensusDelta: 12,
+          scoreDeltas: {
+            contribution: 6,
+            progress: 6,
+            listening: 6,
+            conflict: 6,
+            structure: 6,
+          },
+        },
+      },
+    );
+
+    expect(next.assessments.at(-1)).toMatchObject({
+      source: "fallback",
+      intent: "criteria",
+      impactTitle: "建立共同标准",
+    });
   });
 
   it("formats the interview timer consistently", () => {

@@ -66,7 +66,7 @@ export default function TargetedPractice({
   );
   const isFinalStatement =
     Boolean(state.finalStatement) && targetTurn === state.turn;
-  const scenario = getScenario(state.scenarioId);
+  const scenario = state.scenario ?? getScenario(state.scenarioId);
   const difficulty = getDifficulty(state.difficulty);
   const [input, setInput] = useState("");
   const [voiceCapture, setVoiceCapture] = useState<VoiceCapture | null>(null);

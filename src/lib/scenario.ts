@@ -439,8 +439,11 @@ export function getDifficulty(
   return difficultyProfiles.find((item) => item.id === id) ?? difficultyProfiles[1];
 }
 
-export function getParticipantsForScenario(scenarioId: ScenarioId): Participant[] {
-  const selectedScenario = getScenario(scenarioId);
+export function getParticipantsForScenario(
+  scenarioOrId: Scenario | ScenarioId,
+): Participant[] {
+  const selectedScenario =
+    typeof scenarioOrId === "string" ? getScenario(scenarioOrId) : scenarioOrId;
   return participants.map((participant) => {
     if (participant.id === "user") return participant;
     return {

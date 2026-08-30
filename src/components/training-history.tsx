@@ -212,7 +212,7 @@ export default function TrainingHistory({
                 <div className="flex items-center gap-2 text-xs font-black text-slate-800"><CalendarDays className="size-4 text-indigo-600" /> 训练记录</div>
                 <div className="mt-5 space-y-2">
                   {records.map((record) => {
-                    const itemScenario = getScenario(record.scenarioId);
+                    const itemScenario = record.scenario ?? getScenario(record.scenarioId);
                     const itemDifficulty = getDifficulty(record.difficulty);
                     const active = record.id === selected?.id;
                     return (
@@ -244,7 +244,7 @@ export default function TrainingHistory({
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="text-[10px] font-black tracking-[0.13em] text-indigo-300">SELECTED REPORT</p>
-                      <h2 className="mt-3 text-lg font-black leading-7">{getScenario(selected.scenarioId).title}</h2>
+                      <h2 className="mt-3 text-lg font-black leading-7">{(selected.scenario ?? getScenario(selected.scenarioId)).title}</h2>
                       <p className="mt-1 text-[10px] font-semibold text-slate-400">{formatDate(selected.completedAt)} · {getDifficulty(selected.difficulty).label}</p>
                     </div>
                     <div className="text-right">

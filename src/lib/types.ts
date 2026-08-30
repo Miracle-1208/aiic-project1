@@ -5,12 +5,15 @@ export type View =
   | "room"
   | "report"
   | "retrain"
+  | "generator"
   | "history";
 
-export type ScenarioId =
+export type BuiltInScenarioId =
   | "campus-career-retention"
   | "coffee-safety-crisis"
   | "ai-study-beta";
+
+export type ScenarioId = BuiltInScenarioId | `custom-${string}`;
 
 export type TrainingDifficulty = "guided" | "standard" | "pressure";
 
@@ -82,6 +85,14 @@ export interface Scenario {
   }>;
   quickActions: [string, string, string];
   fallbackFinalists: [string, string];
+}
+
+export interface ScenarioGeneratorInput {
+  role: string;
+  industry: string;
+  companyType: string;
+  category: string;
+  timeMinutes: number;
 }
 
 export interface DifficultyProfile {
@@ -174,6 +185,7 @@ export interface TurnSnapshot {
 
 export interface GroupState {
   scenarioId: ScenarioId;
+  scenario: Scenario;
   difficulty: TrainingDifficulty;
   turn: number;
   timeLeft: number;
@@ -243,6 +255,7 @@ export interface TrainingRecord {
   id: string;
   completedAt: string;
   scenarioId: ScenarioId;
+  scenario?: Scenario;
   difficulty: TrainingDifficulty;
   turns: number;
   consensus: number;

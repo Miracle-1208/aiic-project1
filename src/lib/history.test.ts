@@ -13,6 +13,8 @@ import {
   weakestDimension,
 } from "./history";
 import { createRetrainAttempt } from "./retrain";
+import { scenarios } from "./scenario";
+import type { Scenario } from "./types";
 
 function completedState() {
   return finishSession(
@@ -115,5 +117,26 @@ describe("training history", () => {
     expect(
       parseTrainingHistory(JSON.stringify(updated))[0].retrainAttempts?.[0].id,
     ).toBe("retrain-1");
+  });
+
+  it("keeps the full scenario snapshot for a custom-case history record", () => {
+    const customScenario: Scenario = {
+      ...scenarios[0],
+      id: "custom-history-case",
+      title: "自定义历史案例",
+    };
+    const state = finishSession(
+      createInitialState(customScenario, "standard"),
+      "我们依据用户影响、投入产出和实施周期，选择消息提醒与新用户引导，并保留后续验证控制风险。",
+    );
+    const record = createTrainingRecord(
+      state,
+      "2026-08-30T10:00:00.000Z",
+      "custom-session",
+    );
+    const parsed = parseTrainingHistory(JSON.stringify([record]));
+
+    expect(parsed[0].scenarioId).toBe("custom-history-case");
+    expect(parsed[0].scenario?.title).toBe("自定义历史案例");
   });
 });

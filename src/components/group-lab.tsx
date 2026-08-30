@@ -26,10 +26,17 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import CaseLibrary from "@/components/case-library";
+import ScenarioGenerator from "@/components/scenario-generator";
 import TargetedPractice from "@/components/targeted-practice";
 import TrainingHistory from "@/components/training-history";
 import { useSpeechInput, useSpeechPlayback } from "@/hooks/use-browser-voice";
 import { requestDirectorTurn } from "@/lib/director-client";
+import {
+  persistCustomScenarios,
+  readCustomScenarios,
+  removeCustomScenario,
+  upsertCustomScenario,
+} from "@/lib/custom-scenarios";
 import {
   applyUserTurn,
   createInitialState,
@@ -49,6 +56,7 @@ import {
   getParticipantsForScenario,
   getScenario,
   participants,
+  scenarios,
 } from "@/lib/scenario";
 import { buildReport } from "@/lib/scoring";
 import type {
@@ -481,9 +489,9 @@ function Room({
   const directorStatus = useDirectorStatus();
   const bottomRef = useRef<HTMLDivElement>(null);
   const spokenMessageCountRef = useRef(state.messages.length);
-  const selectedScenario = getScenario(state.scenarioId);
+  const selectedScenario = state.scenario ?? getScenario(state.scenarioId);
   const difficultyProfile = getDifficulty(state.difficulty);
-  const team = getParticipantsForScenario(selectedScenario.id);
+  const team = getParticipantsForScenario(selectedScenario);
   const speechPlayback = useSpeechPlayback();
   const speechInput = useSpeechInput({
     value: input,
@@ -908,7 +916,7 @@ function Report({
   onRetrain: (turn: number) => void;
 }) {
   const report = useMemo(() => buildReport(state), [state]);
-  const selectedScenario = getScenario(state.scenarioId);
+  const selectedScenario = state.scenario ?? getScenario(state.scenarioId);
   const difficultyProfile = getDifficulty(state.difficulty);
   return (
     <main className="min-h-screen bg-[#f5f7fa]">
@@ -1047,10 +1055,16 @@ export default function GroupLab() {
     createInitialState("campus-career-retention", "standard"),
   );
   const [history, setHistory] = useState<TrainingRecord[]>(() => readTrainingHistory());
+  const [customScenarios, setCustomScenarios] = useState<Scenario[]>(() =>
+    readCustomScenarios(),
+  );
   const [activeRecordId, setActiveRecordId] = useState("");
   const [retrainTurn, setRetrainTurn] = useState<number | null>(null);
-  const selectedScenario = getScenario(selectedScenarioId);
-  const team = getParticipantsForScenario(selectedScenarioId);
+  const selectedScenario =
+    [...scenarios, ...customScenarios].find(
+      (scenario) => scenario.id === selectedScenarioId,
+    ) ?? scenarios[0];
+  const team = getParticipantsForScenario(selectedScenario);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -1059,13 +1073,13 @@ export default function GroupLab() {
   const restart = () => {
     setSelectedScenarioId(state.scenarioId);
     setDifficulty(state.difficulty);
-    setState(createInitialState(state.scenarioId, state.difficulty));
+    setState(createInitialState(state.scenario ?? state.scenarioId, state.difficulty));
     setView("briefing");
   };
 
-  const selectScenario = (scenarioId: ScenarioId) => {
-    setSelectedScenarioId(scenarioId);
-    setState(createInitialState(scenarioId, difficulty));
+  const selectScenario = (scenario: Scenario) => {
+    setSelectedScenarioId(scenario.id);
+    setState(createInitialState(scenario, difficulty));
     setView("briefing");
   };
 
@@ -1090,8 +1104,32 @@ export default function GroupLab() {
   const trainAgain = (record: TrainingRecord) => {
     setSelectedScenarioId(record.scenarioId);
     setDifficulty(record.difficulty);
-    setState(createInitialState(record.scenarioId, record.difficulty));
+    setState(
+      createInitialState(
+        record.scenario ?? getScenario(record.scenarioId),
+        record.difficulty,
+      ),
+    );
     setView("briefing");
+  };
+
+  const saveCustomScenario = (scenario: Scenario, startTraining: boolean) => {
+    setCustomScenarios((current) => {
+      const next = upsertCustomScenario(current, scenario);
+      persistCustomScenarios(next);
+      return next;
+    });
+    setSelectedScenarioId(scenario.id);
+    setState(createInitialState(scenario, difficulty));
+    setView(startTraining ? "briefing" : "library");
+  };
+
+  const deleteCustomScenario = (scenarioId: ScenarioId) => {
+    setCustomScenarios((current) => {
+      const next = removeCustomScenario(current, scenarioId);
+      persistCustomScenarios(next);
+      return next;
+    });
   };
 
   const saveRetrainAttempt = (attempt: RetrainAttempt) => {
@@ -1127,8 +1165,21 @@ export default function GroupLab() {
         difficulty={difficulty}
         onDifficultyChange={setDifficulty}
         onSelect={selectScenario}
+        customScenarios={customScenarios}
+        onCreate={() => setView("generator")}
+        onDelete={deleteCustomScenario}
         onHistory={() => setView("history")}
         onBack={() => setView("welcome")}
+      />
+    );
+  }
+  if (view === "generator") {
+    return (
+      <ScenarioGenerator
+        difficulty={difficulty}
+        onDifficultyChange={setDifficulty}
+        onBack={() => setView("library")}
+        onSave={saveCustomScenario}
       />
     );
   }

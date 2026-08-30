@@ -1,4 +1,5 @@
 import { DIFFICULTY_IDS, SCENARIO_IDS } from "./scenario";
+import { ScenarioSchema } from "./scenario-schema";
 import { buildReport } from "./scoring";
 import type {
   GroupState,
@@ -48,7 +49,11 @@ function isTrainingRecord(value: unknown): value is TrainingRecord {
     typeof value.id === "string" &&
     typeof value.completedAt === "string" &&
     !Number.isNaN(Date.parse(value.completedAt)) &&
-    SCENARIO_IDS.includes(value.scenarioId as (typeof SCENARIO_IDS)[number]) &&
+    typeof value.scenarioId === "string" &&
+    (value.scenario === undefined || ScenarioSchema.safeParse(value.scenario).success) &&
+    (SCENARIO_IDS.includes(value.scenarioId as (typeof SCENARIO_IDS)[number]) ||
+      (value.scenarioId.startsWith("custom-") &&
+        ScenarioSchema.safeParse(value.scenario).success)) &&
     DIFFICULTY_IDS.includes(value.difficulty as (typeof DIFFICULTY_IDS)[number]) &&
     typeof value.turns === "number" &&
     typeof value.consensus === "number" &&
@@ -155,6 +160,7 @@ export function createTrainingRecord(
     id,
     completedAt,
     scenarioId: state.scenarioId,
+    scenario: state.scenario,
     difficulty: state.difficulty,
     turns: state.turn,
     consensus: state.consensus,
