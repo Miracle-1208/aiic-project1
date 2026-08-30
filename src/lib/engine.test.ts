@@ -24,8 +24,32 @@ describe("group interview engine", () => {
     expect(classifyIntent("时间不多了，我们先锁定修复消息提醒并开始收敛")).toBe(
       "time",
     );
-    expect(classifyIntent("我不同意，现在的方案还有预算风险")).toBe("challenge");
+    expect(classifyIntent("我不同意，现在的方案还有预算风险")).toBe("general");
+    expect(
+      classifyIntent(
+        "我质疑只做短期修复，因为它可能牺牲长期用户价值，这个风险要用留存变化验证。",
+      ),
+    ).toBe("challenge");
+    expect(
+      classifyIntent(
+        "我反对只修复消息提醒，因为短期留存和长期用户价值的风险仍未验证。",
+      ),
+    ).toBe("challenge");
     expect(classifyIntent("我们结合一下")).toBe("general");
+  });
+
+  it("does not reward a challenge made from one dictionary entity", () => {
+    const initial = createInitialState();
+    const next = applyUserTurn(
+      initial,
+      "我不同意，现在的方案还有预算风险",
+    );
+
+    expect(next.assessments.at(-1)).toMatchObject({
+      intent: "general",
+      consensusDelta: 0,
+    });
+    expect(next.consensus).toBe(initial.consensus);
   });
 
   it("does not let collaboration keywords move the team without case substance", () => {
@@ -380,6 +404,85 @@ describe("group interview engine", () => {
     expect(total(guidedNext.scores) - total(guided.scores)).toBeGreaterThan(
       total(pressureNext.scores) - total(pressure.scores),
     );
+  });
+
+  it("locks pressure consensus when the latest candidate objection is unanswered", () => {
+    const userText =
+      "我们先按消费者安全、响应速度、信息透明和预算约束建立标准。";
+    const directorTurn = {
+      replies: [
+        {
+          speaker: "zhou" as const,
+          content: "标准可以，但还需要先回应第三方检测和对外行动的冲突。",
+        },
+      ],
+      assessment: {
+        intent: "criteria" as const,
+        quality: "strong" as const,
+        evidence: "消费者安全、响应速度、信息透明和预算约束",
+        impactTitle: "建立危机处置标准",
+        impactDetail: "用户建立了共同判断标准。",
+        suggestion: "下一步回应候选人的具体反对。",
+        criteriaAdded: ["消费者安全", "响应速度", "信息透明", "资源成本"],
+        finalistsAdded: [],
+        unresolvedConflict: "标准如何应用到方案？",
+        consensusDelta: 12,
+        scoreDeltas: {
+          contribution: 4,
+          progress: 4,
+          listening: 2,
+          conflict: 2,
+          structure: 4,
+        },
+      },
+    };
+    const pressure = createInitialState("coffee-safety-crisis", "pressure");
+    const guided = createInitialState("coffee-safety-crisis", "guided");
+    const pressureNext = applyUserTurn(pressure, userText, directorTurn);
+    const guidedNext = applyUserTurn(guided, userText, directorTurn);
+
+    expect(pressureNext.consensus).toBeLessThanOrEqual(pressure.consensus);
+    expect(pressureNext.assessments.at(-1)?.consensusDelta).toBeLessThanOrEqual(0);
+    expect(pressureNext.influence.at(-1)?.noProgressReason).toMatch(/林乔|周可/);
+    expect(pressureNext.conflict).toMatch(/退款补偿|第三方检测|原因未明/);
+    expect(guidedNext.consensus).toBeGreaterThan(guided.consensus);
+  });
+
+  it("allows pressure consensus after the latest objections are answered", () => {
+    const initial = createInitialState("coffee-safety-crisis", "pressure");
+    const next = applyUserTurn(
+      initial,
+      "我回应林乔的退款补偿和周可的第三方检测：先公开说明并滚动通报，同时委托第三方全链路检测，先满足对外行动再验证原因。",
+    );
+
+    expect(next.assessments.at(-1)?.intent).toBe("integrate");
+    expect(next.assessments.at(-1)?.consensusDelta).toBeGreaterThan(0);
+    expect(next.consensus).toBeGreaterThan(initial.consensus);
+  });
+
+  it("does not cite an older opening objection after a newer reply replaced it", () => {
+    const initial = createInitialState("coffee-safety-crisis", "guided");
+    const first = applyUserTurn(
+      initial,
+      "我们先按消费者安全、响应速度、信息透明和预算约束建立标准。",
+    );
+    const second = applyUserTurn(first, "我们先继续讨论。");
+
+    expect(second.influence.at(-1)?.noProgressReason).toContain(first.conflict);
+    expect(second.influence.at(-1)?.noProgressReason).not.toMatch(/原因未明|退款补偿/);
+  });
+
+  it("does not fill final options that the final statement never named", () => {
+    const initial = createInitialState();
+    const finished = finishSession(
+      initial,
+      "我们最终按用户影响、预算和上线周期判断，并重点控制长期风险和验证质量。",
+    );
+
+    expect(finished.finalists).toEqual([]);
+    for (const fallback of initial.scenario.fallbackFinalists) {
+      expect(finished.finalists).not.toContain(fallback);
+    }
   });
 
   it("keeps AI coaching grounded when it introduces a new numeric commitment", () => {

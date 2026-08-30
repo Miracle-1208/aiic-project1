@@ -174,17 +174,15 @@ function realCaseNumbers(text: string, scenario?: Scenario) {
 function factualPhraseCount(text: string, scenario?: Scenario) {
   if (!scenario) return 0;
   const phrases = [
-    ...scenario.constraints,
     ...scenario.facts.flatMap((fact) => [fact.label, fact.value]),
     ...scenario.options.flatMap((option) => [
       option.cost,
       option.cycle,
       option.signal,
     ]),
+    ...scenario.constraints,
   ];
-  return phrases.filter(
-    (phrase) => longestSharedSubstringLength(text, phrase) >= 5,
-  ).length;
+  return phrases.filter((phrase) => includesNormalized(text, phrase)).length;
 }
 
 export function scoreRetrainText(

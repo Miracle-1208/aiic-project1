@@ -54,6 +54,21 @@ type IntentContext = Pick<
   "conflict" | "criteria" | "finalists" | "messages"
 >;
 
+type CandidateSpeaker = Extract<SpeakerId, "cheng" | "lin" | "zhou">;
+
+type CandidateStance = {
+  speaker: CandidateSpeaker;
+  speakerName: string;
+  content: string;
+  quote: string;
+};
+
+const CANDIDATE_NAMES: Record<CandidateSpeaker, string> = {
+  cheng: "程野",
+  lin: "林乔",
+  zhou: "周可",
+};
+
 function nowLabel() {
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
@@ -160,6 +175,52 @@ function extractOptions(text: string, selectedScenario: Scenario): string[] {
     .map((option) => option.title);
 }
 
+function matchedCaseTerms(text: string, selectedScenario: Scenario) {
+  const terms = [
+    ...selectedScenario.referenceCriteria.flatMap((criterion) =>
+      criterion.keywords,
+    ),
+    ...Object.values(selectedScenario.optionAliases).flat(),
+  ];
+  return new Set(
+    terms
+      .filter((term) => includesNormalized(text, term))
+      .map(normalizeForMatch),
+  );
+}
+
+function distinctCaseEntityCount(text: string, selectedScenario: Scenario) {
+  return new Set([
+    ...extractCriteria(text, selectedScenario).map((item) => `criterion:${item}`),
+    ...extractOptions(text, selectedScenario).map((item) => `option:${item}`),
+  ]).size;
+}
+
+function isCandidateSpeaker(speaker: SpeakerId): speaker is CandidateSpeaker {
+  return speaker === "cheng" || speaker === "lin" || speaker === "zhou";
+}
+
+function recentCandidateMessages(
+  selectedScenario: Scenario,
+  context: IntentContext | undefined,
+  limit: number,
+) {
+  const source = context?.messages.length
+    ? context.messages
+    : selectedScenario.openingMessages;
+  const candidates = source
+    .filter((item) => isCandidateSpeaker(item.speaker))
+    .map((item) => ({
+      speaker: item.speaker as CandidateSpeaker,
+      content: item.content,
+      turn: "turn" in item ? item.turn : 0,
+    }));
+  const latestTurn = Math.floor(candidates.at(-1)?.turn ?? 0);
+  return candidates
+    .filter((item) => Math.floor(item.turn) === latestTurn)
+    .slice(-limit);
+}
+
 function conflictPhrases(conflict: string) {
   return conflict
     .split(/[，,。！？!?；;、]|还是|或者|或是|\bvs\b/gi)
@@ -169,6 +230,13 @@ function conflictPhrases(conflict: string) {
 
 function mentionsConflict(text: string, conflict: string) {
   return conflictPhrases(conflict).some((phrase) => includesNormalized(text, phrase));
+}
+
+function sharesConflictPhrase(text: string, other: string, conflict: string) {
+  return conflictPhrases(conflict).some(
+    (phrase) =>
+      includesNormalized(text, phrase) && includesNormalized(other, phrase),
+  );
 }
 
 function candidatePositionCount(text: string, selectedScenario: Scenario) {
@@ -201,10 +269,15 @@ function hasVerifiableRisk(
   selectedScenario: Scenario,
   context?: IntentContext,
 ) {
+  const recentCandidate = recentCandidateMessages(
+    selectedScenario,
+    context,
+    1,
+  )[0];
   return (
-    extractOptions(text, selectedScenario).length > 0 ||
-    extractCriteria(text, selectedScenario).length > 0 ||
-    mentionsConflict(text, context?.conflict ?? selectedScenario.initialConflict)
+    mentionsConflict(text, context?.conflict ?? selectedScenario.initialConflict) ||
+    Boolean(recentCandidate && anchorEvidence(text, recentCandidate.content)) ||
+    distinctCaseEntityCount(text, selectedScenario) >= 2
   );
 }
 
@@ -298,7 +371,7 @@ function intentSignals(
     challenge:
       challengeAction && hasVerifiableRisk(text, selectedScenario, context),
     proposal: proposalAction && options.length > 0,
-    support: supportAction && hasCaseEntity,
+    support: supportAction && !challengeAction && hasCaseEntity,
   };
 }
 
@@ -605,6 +678,74 @@ function anchorEvidence(text: string, suppliedEvidence: string) {
   return text.slice(start, end + 1).trim();
 }
 
+function objectionQuote(content: string) {
+  const clauses = content
+    .split(/[。！？；]/)
+    .map((item) => item.trim())
+    .filter((item) => normalizeForMatch(item).length >= 8);
+  const objection = clauses.find((item) =>
+    /反对|不同意|但是|但|风险|担心|质疑|问题|不足|还没有|不能|不稳定|未|如何/.test(
+      item,
+    ),
+  );
+  const quote = (objection ?? clauses[0] ?? content.trim()).slice(0, 72);
+  return `${quote}${(objection ?? clauses[0] ?? content.trim()).length > 72 ? "…" : ""}`;
+}
+
+function isSpecificObjection(
+  content: string,
+  conflict: string,
+  selectedScenario: Scenario,
+) {
+  const challengesPosition =
+    /反对|不同意|但是|但|风险|担心|质疑|问题|不足|还没有|不能|不稳定|未|如何/.test(
+      content,
+    );
+  return (
+    challengesPosition &&
+    (matchedCaseTerms(content, selectedScenario).size > 0 ||
+      mentionsConflict(content, conflict) ||
+      normalizeForMatch(content).length >= 8)
+  );
+}
+
+export function unresolvedPressureStance(
+  text: string,
+  state: GroupState,
+  selectedScenario: Scenario = state.scenario ?? getScenario(state.scenarioId),
+): CandidateStance | undefined {
+  const userTerms = matchedCaseTerms(text, selectedScenario);
+  const recentObjections = recentCandidateMessages(
+    selectedScenario,
+    state,
+    2,
+  )
+    .reverse()
+    .filter((item) =>
+      isSpecificObjection(item.content, state.conflict, selectedScenario),
+    );
+
+  const missing = recentObjections.find((item) => {
+    const stanceTerms = matchedCaseTerms(item.content, selectedScenario);
+    const sharesCaseTerm = [...stanceTerms].some((term) => userTerms.has(term));
+    const quotesStance = Boolean(anchorEvidence(text, item.content));
+    const addressesConflict = sharesConflictPhrase(
+      text,
+      item.content,
+      state.conflict,
+    );
+    return !sharesCaseTerm && !quotesStance && !addressesConflict;
+  });
+
+  if (!missing) return undefined;
+  return {
+    speaker: missing.speaker,
+    speakerName: CANDIDATE_NAMES[missing.speaker],
+    content: missing.content,
+    quote: objectionQuote(missing.content),
+  };
+}
+
 function intentIsGrounded(
   text: string,
   intent: Intent,
@@ -634,7 +775,7 @@ function materializeAssessment(
   selectedScenario: Scenario,
   difficulty: TrainingDifficulty,
   supplied?: DirectorAssessment,
-  context?: IntentContext,
+  context?: GroupState,
 ): TurnAssessment {
   const suppliedEvidence = supplied?.evidence.trim() ?? "";
   const anchoredSuppliedEvidence = supplied
@@ -708,6 +849,13 @@ function materializeAssessment(
   ) {
     consensusDelta = Math.min(0, consensusDelta);
   }
+  const pressureStance =
+    difficulty === "pressure" && context
+      ? unresolvedPressureStance(text, context, selectedScenario)
+      : undefined;
+  if (pressureStance) {
+    consensusDelta = Math.min(0, consensusDelta);
+  }
 
   return {
     ...assessment,
@@ -731,7 +879,8 @@ function materializeAssessment(
         .map((item) => item.trim())
         .filter((item) => groundedOptions.has(item)),
     ).slice(0, 3),
-    unresolvedConflict: assessment.unresolvedConflict.trim().slice(0, 120),
+    unresolvedConflict:
+      pressureStance?.quote ?? assessment.unresolvedConflict.trim().slice(0, 120),
     consensusDelta,
     scoreDeltas,
   };
@@ -742,41 +891,9 @@ function unaddressedStanceReason(
   state: GroupState,
   selectedScenario: Scenario,
 ) {
-  const participantNames: Record<"cheng" | "lin" | "zhou", string> = {
-    cheng: "程野",
-    lin: "林乔",
-    zhou: "周可",
-  };
-  const userEntities = new Set([
-    ...extractCriteria(text, selectedScenario),
-    ...extractOptions(text, selectedScenario),
-  ]);
-  const candidateMessages = [...state.messages]
-    .reverse()
-    .filter((item) =>
-      (["cheng", "lin", "zhou"] as string[]).includes(item.speaker),
-    )
-    .slice(0, 12);
-  const objections = candidateMessages.filter((item) =>
-    /反对|不同意|但是|但|风险|担心|质疑|问题|不足|还没有|不能|不稳定|如果/.test(
-      item.content,
-    ),
-  );
-  const missing = [...objections, ...candidateMessages].find((item) => {
-    const messageEntities = new Set([
-      ...extractCriteria(item.content, selectedScenario),
-      ...extractOptions(item.content, selectedScenario),
-    ]);
-    const sharesEntity = [...messageEntities].some((entity) =>
-      userEntities.has(entity),
-    );
-    return !sharesEntity && !anchorEvidence(text, item.content);
-  });
-
-  if (missing && missing.speaker !== "user" && missing.speaker !== "system") {
-    const quote = missing.content.trim().slice(0, 52);
-    const suffix = missing.content.trim().length > 52 ? "…" : "";
-    return `尚未回应${participantNames[missing.speaker]}的具体反对：“${quote}${suffix}”`;
+  const missing = unresolvedPressureStance(text, state, selectedScenario);
+  if (missing) {
+    return `尚未回应${missing.speakerName}的具体反对：“${missing.quote}”`;
   }
   return `尚未回应当前分歧：“${state.conflict}”`;
 }
@@ -1023,7 +1140,6 @@ export function finishSession(
   const voiceMetric = createVoiceMetric(statement, turn, voiceCapture);
 
   const finalOptions = unique([
-    ...state.finalists,
     ...extractOptions(statement, selectedScenario),
     ...assessment.finalistsAdded,
   ]);
@@ -1034,10 +1150,7 @@ export function finishSession(
     consensus: clamp(state.consensus + Math.max(0, assessment.consensusDelta), 8, 96),
     finalStatement: statement,
     criteria: unique([...state.criteria, ...assessment.criteriaAdded]).slice(-8),
-    finalists:
-      finalOptions.length >= 2
-        ? finalOptions.slice(0, 2)
-        : unique([...finalOptions, ...selectedScenario.fallbackFinalists]).slice(0, 2),
+    finalists: finalOptions.slice(0, selectedScenario.selectionCount),
     messages: [
       ...state.messages,
       message("user", statement, turn, assessment.intent),

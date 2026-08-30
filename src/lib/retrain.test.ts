@@ -211,4 +211,14 @@ describe("targeted practice comparison", () => {
 
     expect(score.evidenceConstraints).toBe(0);
   });
+
+  it("does not treat a five-character overlap as a complete case fact", () => {
+    const score = scoreRetrainText(
+      "安卓用户投诉需要关注，但我计划投入 99 万元并在 10 周后验证。",
+      scenarios[0],
+      liveSnapshot(),
+    );
+
+    expect(score.evidenceConstraints).toBe(0);
+  });
 });
