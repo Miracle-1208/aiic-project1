@@ -59,6 +59,11 @@ import {
   scenarios,
 } from "@/lib/scenario";
 import { buildReport } from "@/lib/scoring";
+import {
+  recommendedRetrainTurn,
+  RETRAIN_CHALLENGE_LIMIT,
+  retrainAttemptsForTurn,
+} from "@/lib/retrain";
 import type {
   DirectorTurn,
   GroupState,
@@ -904,12 +909,14 @@ function BoardBlock({ icon, title, items, empty }: { icon: React.ReactNode; titl
 
 function Report({
   state,
+  retrainAttempts,
   onRestart,
   onLibrary,
   onHistory,
   onRetrain,
 }: {
   state: GroupState;
+  retrainAttempts: RetrainAttempt[];
   onRestart: () => void;
   onLibrary: () => void;
   onHistory: () => void;
@@ -918,6 +925,15 @@ function Report({
   const report = useMemo(() => buildReport(state), [state]);
   const selectedScenario = state.scenario ?? getScenario(state.scenarioId);
   const difficultyProfile = getDifficulty(state.difficulty);
+  const attemptCountForTurn = (turn: number) =>
+    retrainAttemptsForTurn(retrainAttempts, turn).length;
+  const recommendedAssessment = recommendedRetrainTurn(
+    state.assessments.filter((assessment) =>
+      (state.turnSnapshots ?? []).some(
+        (snapshot) => snapshot.targetTurn === assessment.turn,
+      ),
+    ),
+  );
   return (
     <main className="min-h-screen bg-[#f5f7fa]">
       <ShellHeader />
@@ -989,7 +1005,14 @@ function Report({
                         onClick={() => onRetrain(event.turn)}
                         className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1.5 text-[10px] font-black text-indigo-700 transition hover:bg-indigo-100"
                       >
-                        <RotateCcw className="size-3" /> 重练这一轮
+                        <RotateCcw className="size-3" />
+                        {attemptCountForTurn(event.turn) >= RETRAIN_CHALLENGE_LIMIT
+                          ? "查看挑战结果（3/3）"
+                          : attemptCountForTurn(event.turn) > 0
+                            ? `继续重练（${attemptCountForTurn(event.turn)}/3）`
+                            : event.turn === recommendedAssessment?.turn
+                              ? "推荐：开始三次重练"
+                              : "开始三次重练"}
                       </button>
                     )}
                   </div>
@@ -1017,8 +1040,18 @@ function Report({
               </section>
             )}
             <section className="rounded-[28px] border border-indigo-100 bg-indigo-50 p-6">
-              <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><TimerReset className="size-4" /> 下一轮只练一件事</div>
+              <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><TimerReset className="size-4" /> {recommendedAssessment ? `系统推荐重练第 ${recommendedAssessment.turn} 轮` : "下一轮只练一件事"}</div>
               <p className="mt-4 text-sm font-bold leading-7 text-indigo-950">{report.focus}</p>
+              {recommendedAssessment && (
+                <button type="button" onClick={() => onRetrain(recommendedAssessment.turn)} className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-black text-white transition hover:bg-indigo-700">
+                  <RotateCcw className="size-3.5" />
+                  {attemptCountForTurn(recommendedAssessment.turn) >= RETRAIN_CHALLENGE_LIMIT
+                    ? "查看三次挑战结果"
+                    : attemptCountForTurn(recommendedAssessment.turn) > 0
+                      ? `继续挑战（${attemptCountForTurn(recommendedAssessment.turn)}/3）`
+                      : "开始连续重练"}
+                </button>
+              )}
             </section>
             <section className="rounded-[28px] border border-slate-200 bg-white p-6">
               <p className="text-xs font-black text-slate-900">小组最终选择</p>
@@ -1060,6 +1093,8 @@ export default function GroupLab() {
   );
   const [activeRecordId, setActiveRecordId] = useState("");
   const [retrainTurn, setRetrainTurn] = useState<number | null>(null);
+  const activeRetrainAttempts =
+    history.find((record) => record.id === activeRecordId)?.retrainAttempts ?? [];
   const selectedScenario =
     [...scenarios, ...customScenarios].find(
       (scenario) => scenario.id === selectedScenarioId,
@@ -1198,6 +1233,7 @@ export default function GroupLab() {
     return (
       <Report
         state={state}
+        retrainAttempts={activeRetrainAttempts}
         onRestart={restart}
         onLibrary={() => setView("library")}
         onHistory={() => setView("history")}
@@ -1213,6 +1249,7 @@ export default function GroupLab() {
       <TargetedPractice
         state={state}
         targetTurn={retrainTurn}
+        attempts={activeRetrainAttempts}
         onBack={() => setView("report")}
         onSaved={saveRetrainAttempt}
       />

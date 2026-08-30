@@ -4,11 +4,49 @@ import type {
   VoiceTurnMetric,
 } from "./types";
 
+export const RETRAIN_CHALLENGE_LIMIT = 3;
+
 export function assessmentImpact(assessment: TurnAssessment) {
   return (
     assessment.consensusDelta +
     Object.values(assessment.scoreDeltas).reduce((sum, value) => sum + value, 0)
   );
+}
+
+export function retrainAttemptsForTurn(
+  attempts: RetrainAttempt[],
+  targetTurn: number,
+) {
+  return [...new Map(attempts.map((attempt) => [attempt.id, attempt])).values()]
+    .filter((attempt) => attempt.targetTurn === targetTurn)
+    .sort((left, right) => left.completedAt.localeCompare(right.completedAt))
+    .slice(-RETRAIN_CHALLENGE_LIMIT);
+}
+
+export function recommendedRetrainTurn(assessments: TurnAssessment[]) {
+  const qualityRank = { weak: 1, developing: 2, strong: 3 };
+  return [...assessments].sort((left, right) => {
+    const qualityDelta = qualityRank[left.quality] - qualityRank[right.quality];
+    if (qualityDelta !== 0) return qualityDelta;
+    const impactDelta = assessmentImpact(left) - assessmentImpact(right);
+    if (impactDelta !== 0) return impactDelta;
+    return left.turn - right.turn;
+  })[0];
+}
+
+export function bestRetrainAttempt(attempts: RetrainAttempt[]) {
+  return attempts.reduce<RetrainAttempt | undefined>((best, attempt) => {
+    if (!best) return attempt;
+    if (attempt.revisedImpactScore !== best.revisedImpactScore) {
+      return attempt.revisedImpactScore > best.revisedImpactScore ? attempt : best;
+    }
+    if (attempt.revisedConsensusDelta !== best.revisedConsensusDelta) {
+      return attempt.revisedConsensusDelta > best.revisedConsensusDelta
+        ? attempt
+        : best;
+    }
+    return attempt.completedAt > best.completedAt ? attempt : best;
+  }, undefined);
 }
 
 export function createRetrainAttempt({

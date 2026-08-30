@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createRetrainAttempt } from "./retrain";
+import {
+  bestRetrainAttempt,
+  createRetrainAttempt,
+  recommendedRetrainTurn,
+  retrainAttemptsForTurn,
+} from "./retrain";
 import type { TurnAssessment } from "./types";
 
 function assessment(
@@ -74,5 +79,43 @@ describe("targeted practice comparison", () => {
 
     expect(attempt.originalCharsPerMinute).toBe(180);
     expect(attempt.revisedCharsPerMinute).toBe(240);
+  });
+
+  it("keeps three chronological attempts for one challenge and finds the best", () => {
+    const attempts = [1, 2, 3, 4].map((index) =>
+      createRetrainAttempt({
+        targetTurn: 2,
+        originalText: "原发言",
+        revisedText: `第 ${index} 次重练`,
+        originalAssessment: assessment("developing", 3, 2),
+        revisedAssessment: assessment(
+          index === 3 ? "strong" : "developing",
+          index === 3 ? 10 : index + 3,
+          index === 3 ? 7 : index + 2,
+        ),
+        completedAt: `2026-08-30T09:0${index}:00.000Z`,
+        id: `retrain-${index}`,
+      }),
+    );
+
+    const challenge = retrainAttemptsForTurn([...attempts, attempts[3]], 2);
+
+    expect(challenge.map((attempt) => attempt.id)).toEqual([
+      "retrain-2",
+      "retrain-3",
+      "retrain-4",
+    ]);
+    expect(bestRetrainAttempt(challenge)?.id).toBe("retrain-3");
+  });
+
+  it("recommends the weakest low-impact turn first", () => {
+    const stronger = assessment("developing", 5, 4);
+    const weakest = {
+      ...assessment("weak", 1, 0),
+      id: "weakest",
+      turn: 3,
+    };
+
+    expect(recommendedRetrainTurn([stronger, weakest])?.turn).toBe(3);
   });
 });

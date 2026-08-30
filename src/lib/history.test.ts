@@ -119,6 +119,43 @@ describe("training history", () => {
     ).toBe("retrain-1");
   });
 
+  it("keeps at most three retrain attempts for each target turn", () => {
+    const state = completedState();
+    const record = createTrainingRecord(
+      state,
+      "2026-08-30T08:00:00.000Z",
+      "session-limit",
+    );
+    const originalAssessment = state.assessments[0];
+    let records = [record];
+
+    for (let index = 1; index <= 4; index += 1) {
+      records = appendRetrainAttempt(
+        records,
+        record.id,
+        createRetrainAttempt({
+          targetTurn: originalAssessment.turn,
+          originalText: originalAssessment.evidence,
+          revisedText: `第 ${index} 次重练`,
+          originalAssessment,
+          revisedAssessment: {
+            ...originalAssessment,
+            id: `assessment-${index}`,
+            consensusDelta: originalAssessment.consensusDelta + index,
+          },
+          completedAt: `2026-08-30T09:0${index}:00.000Z`,
+          id: `retrain-${index}`,
+        }),
+      );
+    }
+
+    expect(records[0].retrainAttempts?.map((attempt) => attempt.id)).toEqual([
+      "retrain-4",
+      "retrain-3",
+      "retrain-2",
+    ]);
+  });
+
   it("keeps the full scenario snapshot for a custom-case history record", () => {
     const customScenario: Scenario = {
       ...scenarios[0],

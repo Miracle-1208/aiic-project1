@@ -1,6 +1,7 @@
 import { DIFFICULTY_IDS, SCENARIO_IDS } from "./scenario";
 import { ScenarioSchema } from "./scenario-schema";
 import { buildReport } from "./scoring";
+import { RETRAIN_CHALLENGE_LIMIT } from "./retrain";
 import type {
   GroupState,
   RetrainAttempt,
@@ -128,13 +129,28 @@ export function appendRetrainAttempt(
 ): TrainingRecord[] {
   return records.map((record) =>
     record.id === recordId
-      ? {
-          ...record,
-          retrainAttempts: [
+      ? (() => {
+          const withoutDuplicate = (record.retrainAttempts ?? []).filter(
+            (item) => item.id !== attempt.id,
+          );
+          const sameTurn = [
             attempt,
-            ...(record.retrainAttempts ?? []).filter((item) => item.id !== attempt.id),
-          ].slice(0, 20),
-        }
+            ...withoutDuplicate.filter(
+              (item) => item.targetTurn === attempt.targetTurn,
+            ),
+          ].slice(0, RETRAIN_CHALLENGE_LIMIT);
+          const otherTurns = withoutDuplicate.filter(
+            (item) => item.targetTurn !== attempt.targetTurn,
+          );
+          return {
+            ...record,
+            retrainAttempts: [...sameTurn, ...otherTurns]
+              .sort((left, right) =>
+                right.completedAt.localeCompare(left.completedAt),
+              )
+              .slice(0, 20),
+          };
+        })()
       : record,
   );
 }

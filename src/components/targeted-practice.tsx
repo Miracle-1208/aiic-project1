@@ -19,13 +19,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSpeechInput, useSpeechPlayback } from "@/hooks/use-browser-voice";
 import { requestDirectorTurn } from "@/lib/director-client";
 import { applyUserTurn, finishSession, restoreTurnSnapshot } from "@/lib/engine";
-import { createRetrainAttempt } from "@/lib/retrain";
+import {
+  bestRetrainAttempt,
+  createRetrainAttempt,
+  RETRAIN_CHALLENGE_LIMIT,
+  retrainAttemptsForTurn,
+} from "@/lib/retrain";
 import { getDifficulty, getScenario } from "@/lib/scenario";
 import type {
   DirectorTurn,
   GroupState,
   RetrainAttempt,
-  TurnAssessment,
   VoiceCapture,
 } from "@/lib/types";
 
@@ -43,11 +47,13 @@ function deltaLabel(value: number) {
 export default function TargetedPractice({
   state,
   targetTurn,
+  attempts,
   onBack,
   onSaved,
 }: {
   state: GroupState;
   targetTurn: number;
+  attempts: RetrainAttempt[];
   onBack: () => void;
   onSaved: (attempt: RetrainAttempt) => void;
 }) {
@@ -72,10 +78,15 @@ export default function TargetedPractice({
   const [voiceCapture, setVoiceCapture] = useState<VoiceCapture | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [notice, setNotice] = useState("");
-  const [result, setResult] = useState<{
-    attempt: RetrainAttempt;
-    assessment: TurnAssessment;
-  } | null>(null);
+  const [result, setResult] = useState<RetrainAttempt | null>(null);
+  const challengeAttempts = useMemo(
+    () =>
+      retrainAttemptsForTurn(
+        result ? [...attempts, result] : attempts,
+        targetTurn,
+      ),
+    [attempts, result, targetTurn],
+  );
   const controllerRef = useRef<AbortController | null>(null);
   const unmountedRef = useRef(false);
   const playback = useSpeechPlayback();
@@ -97,6 +108,12 @@ export default function TargetedPractice({
     };
   }, []);
 
+  const bestAttempt = bestRetrainAttempt(challengeAttempts);
+  const challengeComplete =
+    challengeAttempts.length >= RETRAIN_CHALLENGE_LIMIT;
+  const showComparison = Boolean(result) || challengeComplete;
+  const displayAttempt = result ?? bestAttempt;
+
   const toggleMicrophone = () => {
     playback.cancel();
     if (speechInput.isListening) speechInput.stop();
@@ -112,7 +129,8 @@ export default function TargetedPractice({
       !originalMessage ||
       revisedText.length < minimumLength ||
       isAnalyzing ||
-      speechInput.isListening
+      speechInput.isListening ||
+      challengeComplete
     ) {
       return;
     }
@@ -167,7 +185,7 @@ export default function TargetedPractice({
       originalVoiceMetric,
       revisedVoiceMetric,
     });
-    setResult({ attempt, assessment: revisedAssessment });
+    setResult(attempt);
     setIsAnalyzing(false);
     onSaved(attempt);
 
@@ -226,9 +244,23 @@ export default function TargetedPractice({
               <div className="rounded-2xl bg-white/[0.07] px-4 py-3"><p className="text-[9px] font-bold text-slate-500">剩余时间</p><p className="mt-1 text-xl font-black">{Math.floor(restoredState.timeLeft / 60)}:{String(restoredState.timeLeft % 60).padStart(2, "0")}</p></div>
             </div>
           </div>
+          <div className="mt-7 border-t border-white/10 pt-5">
+            <div className="flex items-center justify-between text-[10px] font-black tracking-[0.1em] text-slate-400">
+              <span>连续重练挑战</span>
+              <span>{challengeAttempts.length} / {RETRAIN_CHALLENGE_LIMIT} 次</span>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {Array.from({ length: RETRAIN_CHALLENGE_LIMIT }, (_, index) => (
+                <div
+                  key={index}
+                  className={`h-2 rounded-full ${index < challengeAttempts.length ? "bg-emerald-400" : index === challengeAttempts.length && !challengeComplete ? "bg-indigo-400" : "bg-white/10"}`}
+                />
+              ))}
+            </div>
+          </div>
         </div>
 
-        {!result ? (
+        {!showComparison ? (
           <div className="mt-6 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
             <aside className="space-y-5">
               <section className="rounded-[28px] border border-slate-200 bg-white p-6">
@@ -254,7 +286,7 @@ export default function TargetedPractice({
             </aside>
 
             <section className="rounded-[28px] border border-slate-200 bg-white p-6 sm:p-8">
-              <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><Zap className="size-4" /> 重新组织你的发言</div>
+              <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><Zap className="size-4" /> 第 {challengeAttempts.length + 1} 次挑战</div>
               <h2 className="mt-3 text-2xl font-black tracking-[-0.03em] text-slate-950">用更好的方式推动团队</h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">不要照抄原句。先交付结论，再补理由和下一步动作。</p>
               <textarea
@@ -276,52 +308,85 @@ export default function TargetedPractice({
                 </p>
               </div>
               <button type="button" onClick={() => void submit()} disabled={isAnalyzing || speechInput.isListening || input.trim().length < (isFinalStatement ? 20 : 4)} className="mt-6 flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-30">
-                {isAnalyzing ? "正在比较新旧影响……" : "提交并查看对比"} {isAnalyzing ? <Sparkles className="size-4 animate-pulse" /> : <Send className="size-4" />}
+                {isAnalyzing ? "正在比较新旧影响……" : `提交第 ${challengeAttempts.length + 1} 次挑战`} {isAnalyzing ? <Sparkles className="size-4 animate-pulse" /> : <Send className="size-4" />}
               </button>
             </section>
           </div>
-        ) : (
+        ) : displayAttempt ? (
           <div className="mt-6 space-y-6">
-            <section className={`rounded-[28px] border p-7 sm:p-9 ${result.attempt.improved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+            <section className={`rounded-[28px] border p-7 sm:p-9 ${challengeComplete || displayAttempt.improved ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
               <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
                 <div>
-                  <div className={`flex items-center gap-2 text-xs font-black ${result.attempt.improved ? "text-emerald-700" : "text-amber-700"}`}>{result.attempt.improved ? <CheckCircle2 className="size-4" /> : <Target className="size-4" />}{result.attempt.improved ? "本次发言产生了更强影响" : "方向正确，还可以继续压缩和强化"}</div>
-                  <h2 className="mt-3 text-2xl font-black text-slate-950">第 {targetTurn} 轮新旧表现对比</h2>
+                  <div className={`flex items-center gap-2 text-xs font-black ${challengeComplete || displayAttempt.improved ? "text-emerald-700" : "text-amber-700"}`}>
+                    {challengeComplete || displayAttempt.improved ? <CheckCircle2 className="size-4" /> : <Target className="size-4" />}
+                    {challengeComplete ? "三次挑战已完成，最佳版本已标出" : displayAttempt.improved ? "本次发言产生了更强影响" : "方向正确，还可以继续压缩和强化"}
+                  </div>
+                  <h2 className="mt-3 text-2xl font-black text-slate-950">第 {targetTurn} 轮连续重练对比</h2>
+                  <p className="mt-2 text-xs font-semibold text-slate-500">原发言与每次尝试使用同一讨论现场和同一套评分规则。</p>
                 </div>
-                <div className={`rounded-2xl bg-white px-5 py-3 text-center shadow-sm ${result.attempt.impactDelta > 0 ? "text-emerald-700" : "text-slate-700"}`}><p className="text-[9px] font-black text-slate-400">综合影响变化</p><p className="mt-1 text-3xl font-black">{deltaLabel(result.attempt.impactDelta)}</p></div>
+                <div className={`rounded-2xl bg-white px-5 py-3 text-center shadow-sm ${(bestAttempt?.impactDelta ?? 0) > 0 ? "text-emerald-700" : "text-slate-700"}`}>
+                  <p className="text-[9px] font-black text-slate-400">最佳综合提升</p>
+                  <p className="mt-1 text-3xl font-black">{deltaLabel(bestAttempt?.impactDelta ?? 0)}</p>
+                </div>
               </div>
             </section>
 
-            <div className="grid gap-5 lg:grid-cols-2">
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
               {[
-                { label: "原发言", text: result.attempt.originalText, quality: result.attempt.originalQuality, title: result.attempt.originalImpactTitle, impact: result.attempt.originalImpactScore, consensus: result.attempt.originalConsensusDelta, pace: result.attempt.originalCharsPerMinute },
-                { label: "重练后", text: result.attempt.revisedText, quality: result.attempt.revisedQuality, title: result.attempt.revisedImpactTitle, impact: result.attempt.revisedImpactScore, consensus: result.attempt.revisedConsensusDelta, pace: result.attempt.revisedCharsPerMinute },
-              ].map((item, index) => (
-                <section key={item.label} className={`rounded-[28px] border bg-white p-6 sm:p-7 ${index === 1 ? "border-indigo-200 shadow-lg shadow-indigo-100/50" : "border-slate-200"}`}>
-                  <div className="flex items-center justify-between"><p className="text-[10px] font-black tracking-[0.13em] text-slate-400">{item.label}</p><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black text-slate-600">{QUALITY_LABEL[item.quality]}</span></div>
-                  <p className="mt-4 min-h-20 rounded-2xl bg-slate-50 p-4 text-sm font-semibold leading-7 text-slate-700">“{item.text}”</p>
-                  <p className="mt-4 text-sm font-black text-slate-950">{item.title}</p>
-                  <div className="mt-5 grid grid-cols-3 gap-3">
-                    <div className="rounded-xl bg-slate-50 p-3"><p className="text-[9px] font-bold text-slate-400">综合影响</p><p className="mt-1 text-lg font-black text-slate-900">{item.impact}</p></div>
-                    <div className="rounded-xl bg-slate-50 p-3"><p className="text-[9px] font-bold text-slate-400">共识变化</p><p className="mt-1 text-lg font-black text-slate-900">{deltaLabel(item.consensus)}</p></div>
-                    <div className="rounded-xl bg-slate-50 p-3"><p className="text-[9px] font-bold text-slate-400">表达速度</p><p className="mt-1 text-lg font-black text-slate-900">{item.pace ?? "—"}</p></div>
+                {
+                  id: "original",
+                  label: "原发言",
+                  text: displayAttempt.originalText,
+                  quality: displayAttempt.originalQuality,
+                  title: displayAttempt.originalImpactTitle,
+                  impact: displayAttempt.originalImpactScore,
+                  consensus: displayAttempt.originalConsensusDelta,
+                  pace: displayAttempt.originalCharsPerMinute,
+                  isBest: false,
+                },
+                ...challengeAttempts.map((attempt, index) => ({
+                  id: attempt.id,
+                  label: `第 ${index + 1} 次`,
+                  text: attempt.revisedText,
+                  quality: attempt.revisedQuality,
+                  title: attempt.revisedImpactTitle,
+                  impact: attempt.revisedImpactScore,
+                  consensus: attempt.revisedConsensusDelta,
+                  pace: attempt.revisedCharsPerMinute,
+                  isBest: attempt.id === bestAttempt?.id,
+                })),
+              ].map((item) => (
+                <section key={item.id} className={`relative rounded-[28px] border bg-white p-6 ${item.isBest ? "border-emerald-300 shadow-lg shadow-emerald-100/60" : "border-slate-200"}`}>
+                  {item.isBest && <span className="absolute right-5 top-5 rounded-full bg-emerald-100 px-2.5 py-1 text-[9px] font-black text-emerald-700">当前最佳</span>}
+                  <div className="flex items-center gap-2 pr-20">
+                    <p className="text-[10px] font-black tracking-[0.13em] text-slate-400">{item.label}</p>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[8px] font-black text-slate-600">{QUALITY_LABEL[item.quality]}</span>
+                  </div>
+                  <p className="mt-4 min-h-28 rounded-2xl bg-slate-50 p-4 text-xs font-semibold leading-6 text-slate-700">“{item.text}”</p>
+                  <p className="mt-4 min-h-10 text-xs font-black leading-5 text-slate-950">{item.title}</p>
+                  <div className="mt-5 grid grid-cols-3 gap-2">
+                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">综合影响</p><p className="mt-1 text-base font-black text-slate-900">{item.impact}</p></div>
+                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">共识变化</p><p className="mt-1 text-base font-black text-slate-900">{deltaLabel(item.consensus)}</p></div>
+                    <div className="rounded-xl bg-slate-50 p-2.5"><p className="text-[8px] font-bold text-slate-400">表达速度</p><p className="mt-1 text-base font-black text-slate-900">{item.pace ?? "—"}</p></div>
                   </div>
                 </section>
               ))}
             </div>
 
             <section className="rounded-[28px] border border-indigo-100 bg-indigo-50 p-6 sm:p-8">
-              <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><TrendingUp className="size-4" /> 下一次继续优化</div>
-              <p className="mt-3 text-sm font-bold leading-7 text-indigo-950">{result.assessment.suggestion}</p>
-              {result.attempt.revisedCharsPerMinute && <p className="mt-3 flex items-center gap-2 text-[10px] font-semibold text-indigo-600"><Gauge className="size-3.5" /> 重练语速约 {result.attempt.revisedCharsPerMinute} 字/分钟</p>}
+              <div className="flex items-center gap-2 text-xs font-black text-indigo-700"><TrendingUp className="size-4" /> {challengeComplete ? "下一场训练重点" : "下一次继续优化"}</div>
+              <p className="mt-3 text-sm font-bold leading-7 text-indigo-950">{bestAttempt?.suggestion}</p>
+              {bestAttempt?.revisedCharsPerMinute && <p className="mt-3 flex items-center gap-2 text-[10px] font-semibold text-indigo-600"><Gauge className="size-3.5" /> 最佳版本语速约 {bestAttempt.revisedCharsPerMinute} 字/分钟</p>}
             </section>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <button type="button" onClick={onBack} className="flex h-13 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white text-sm font-black text-slate-600 transition hover:text-indigo-700"><ArrowLeft className="size-4" /> 返回完整报告</button>
-              <button type="button" onClick={resetAttempt} className="flex h-13 items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition hover:bg-indigo-600"><RotateCcw className="size-4" /> 再练这一轮</button>
+            <div className={`grid gap-3 ${challengeComplete ? "" : "sm:grid-cols-2"}`}>
+              <button type="button" onClick={onBack} className="flex h-13 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white text-sm font-black text-slate-600 transition hover:text-indigo-700"><ArrowLeft className="size-4" /> {challengeComplete ? "完成挑战，返回报告" : "返回完整报告"}</button>
+              {!challengeComplete && (
+                <button type="button" onClick={resetAttempt} className="flex h-13 items-center justify-center gap-2 rounded-2xl bg-slate-950 text-sm font-black text-white transition hover:bg-indigo-600"><RotateCcw className="size-4" /> 继续第 {challengeAttempts.length + 1} 次挑战</button>
+              )}
             </div>
           </div>
-        )}
+        ) : null}
       </section>
     </main>
   );
