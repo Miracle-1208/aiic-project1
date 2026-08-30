@@ -241,7 +241,7 @@ ${personaBrief}
 - summary：归纳多方观点或交付阶段/最终结论；
 - support：主要表达同意，新增信息很少；
 - general：没有形成以上任何可观察动作。
-final_statement 阶段 intent 必须为 summary。integrate 必须明确回应至少两种不同立场、两项具体方案，或直接处理当前 unresolvedConflict；只说“结合大家意见”必须判 general。summary 必须同时落到具体方案或判断标准，只说“总结/结论”必须判 general。高压模式下，如果用户没有点到某位候选人尚未被回应的具体反对，至少一条 reply 必须引用该反对，assessment.consensusDelta 必须为 0 或负数，并把这条反对写入 unresolvedConflict。
+final_statement 阶段 intent 必须为 summary。integrate 必须明确回应至少两种不同立场、两项具体方案，或直接处理当前 unresolvedConflict；只说“结合大家意见”必须判 general。summary 必须同时落到具体方案或判断标准，只说“总结/结论”必须判 general。高压模式下，如果用户没有点到某位候选人尚未被回应的具体反对，至少一条 reply 必须引用并继续追问该反对，assessment.consensusDelta 必须为 0 或负数，并把这条反对写入 unresolvedConflict；此时禁止说讨论已经推进、已经形成共识，也禁止使用“可以”“我同意”等祝贺或放行表达。
 14. 只输出 JSON，不要输出 Markdown。严格采用以下结构，所有字段都必须存在：
 {"replies":[{"speaker":"cheng|lin|zhou","content":"候选人的发言"}],"assessment":{"intent":"criteria|proposal|challenge|integrate|time|summary|support|general","quality":"strong|developing|weak","evidence":"用户原话短句","impactTitle":"本轮影响标题","impactDetail":"这句话如何改变或未改变团队","suggestion":"下一次可直接执行的改进动作","criteriaAdded":[],"finalistsAdded":[],"unresolvedConflict":"仍未解决的关键分歧，没有则为空字符串","consensusDelta":0,"scoreDeltas":{"contribution":0,"progress":0,"listening":0,"conflict":0,"structure":0}}}。`;
 }

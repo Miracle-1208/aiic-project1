@@ -115,6 +115,8 @@ describe("group interview engine", () => {
     expect(next.finalists).toEqual(
       expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
     );
+    expect(next.conflict).toBe(initial.conflict);
+    expect(next.conflict).not.toBe("如何在限制条件内兼顾当前两种核心主张？");
   });
 
   it("does not invent shared criteria when the user only says the word standard", () => {
@@ -404,18 +406,15 @@ describe("group interview engine", () => {
     expect(total(guidedNext.scores) - total(guided.scores)).toBeGreaterThan(
       total(pressureNext.scores) - total(pressure.scores),
     );
+    expect(guidedNext.conflict).toBe(guided.conflict);
+    expect(pressureNext.conflict).toBe(pressure.conflict);
   });
 
   it("locks pressure consensus when the latest candidate objection is unanswered", () => {
     const userText =
       "我们先按消费者安全、响应速度、信息透明和预算约束建立标准。";
     const directorTurn = {
-      replies: [
-        {
-          speaker: "zhou" as const,
-          content: "标准可以，但还需要先回应第三方检测和对外行动的冲突。",
-        },
-      ],
+      replies: [],
       assessment: {
         intent: "criteria" as const,
         quality: "strong" as const,
@@ -440,11 +439,26 @@ describe("group interview engine", () => {
     const guided = createInitialState("coffee-safety-crisis", "guided");
     const pressureNext = applyUserTurn(pressure, userText, directorTurn);
     const guidedNext = applyUserTurn(guided, userText, directorTurn);
+    const pressureReplies = pressureNext.messages.filter(
+      (message) =>
+        message.turn >= 1 &&
+        message.turn < 2 &&
+        ["cheng", "lin", "zhou"].includes(message.speaker),
+    );
 
     expect(pressureNext.consensus).toBeLessThanOrEqual(pressure.consensus);
     expect(pressureNext.assessments.at(-1)?.consensusDelta).toBeLessThanOrEqual(0);
     expect(pressureNext.influence.at(-1)?.noProgressReason).toMatch(/林乔|周可/);
     expect(pressureNext.conflict).toMatch(/退款补偿|第三方检测|原因未明/);
+    expect(pressureNext.scores.progress).toBe(pressure.scores.progress);
+    expect(pressureNext.scores.contribution - pressure.scores.contribution).toBeLessThanOrEqual(1);
+    expect(pressureReplies).toHaveLength(2);
+    expect(pressureReplies.map((message) => message.content).join(" ")).not.toMatch(
+      /可以|推进方式可以|我同意统一标准/,
+    );
+    expect(pressureReplies.map((message) => message.content).join(" ")).toMatch(
+      /第三方检测|退款补偿|林乔|周可/,
+    );
     expect(guidedNext.consensus).toBeGreaterThan(guided.consensus);
   });
 
@@ -483,6 +497,22 @@ describe("group interview engine", () => {
     for (const fallback of initial.scenario.fallbackFinalists) {
       expect(finished.finalists).not.toContain(fallback);
     }
+  });
+
+  it("keeps grounded discussion finalists when the final statement does not repeat them", () => {
+    const discussed = applyUserTurn(
+      createInitialState(),
+      "结合程野关注的留存和林乔强调的长期价值，先修复消息提醒，再验证优化新用户引导。",
+    );
+    const finished = finishSession(
+      discussed,
+      "我们最终按用户影响、预算和上线周期判断，并重点控制长期风险和验证质量。",
+    );
+
+    expect(finished.finalists).toEqual(
+      expect.arrayContaining(["修复消息提醒", "优化新用户引导"]),
+    );
+    expect(finished.finalists).toHaveLength(2);
   });
 
   it("keeps AI coaching grounded when it introduces a new numeric commitment", () => {

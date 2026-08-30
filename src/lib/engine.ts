@@ -500,6 +500,31 @@ function fallbackDirectorResponses(
     .map(([speaker, content], index) => message(speaker, content, turn + index / 10, intent));
 }
 
+function pressureBlockedResponses(
+  intent: Intent,
+  turn: number,
+  conflict: string,
+  pressureStance?: CandidateStance,
+): Message[] {
+  const primarySpeaker = pressureStance?.speaker ?? "zhou";
+  const secondarySpeaker: CandidateSpeaker =
+    primarySpeaker === "cheng" ? "zhou" : "cheng";
+  const pressureQuote = pressureStance?.quote
+    .replace(/^(?:(?:这个|方案|标准|方向|做法)?可以|我同意(?:统一标准)?)[，,、；;：:]?(?:但|但是)?/, "")
+    .trim();
+  const primaryContent = pressureStance
+    ? `我刚才的反对还没有被回应：“${pressureQuote || pressureStance.quote}”。请先直接处理这条分歧。`
+    : `这轮还没有处理当前分歧：“${conflict}”。请先明确回应其中一边的具体主张。`;
+  const secondaryContent = pressureStance
+    ? `先不要把这轮发言当作已经完成推进。请先回应${pressureStance.speakerName}的这条反对，再谈方案收敛。`
+    : `现在还不能进入收敛。请先说明你如何处理当前未解冲突，再提出下一步。`;
+
+  return [
+    message(primarySpeaker, primaryContent, turn, intent),
+    message(secondarySpeaker, secondaryContent, turn + 0.1, intent),
+  ];
+}
+
 function directorResponses(
   intent: Intent,
   turn: number,
@@ -507,6 +532,10 @@ function directorResponses(
   selectedScenario: Scenario,
   difficulty: TrainingDifficulty,
   replies?: DirectorReply[],
+  pressureBlock?: {
+    conflict: string;
+    stance?: CandidateStance;
+  },
 ): Message[] {
   const validReplies = replies
     ?.filter(
@@ -517,6 +546,14 @@ function directorResponses(
     .slice(0, 2);
 
   if (!validReplies?.length) {
+    if (pressureBlock) {
+      return pressureBlockedResponses(
+        intent,
+        turn,
+        pressureBlock.conflict,
+        pressureBlock.stance,
+      );
+    }
     return fallbackDirectorResponses(intent, turn, text, selectedScenario, difficulty);
   }
 
@@ -746,6 +783,27 @@ export function unresolvedPressureStance(
   };
 }
 
+function groundedUnresolvedConflict(
+  proposedConflict: string,
+  text: string,
+  state: GroupState,
+  selectedScenario: Scenario,
+  pressureStance?: CandidateStance,
+) {
+  if (pressureStance) return pressureStance.quote;
+  const proposed = proposedConflict.trim().slice(0, 120);
+  if (!proposed) return "";
+
+  const userAnchor = anchorEvidence(text, proposed);
+  if (userAnchor) return userAnchor.slice(0, 120);
+
+  for (const candidate of recentCandidateMessages(selectedScenario, state, 2)) {
+    const candidateAnchor = anchorEvidence(candidate.content, proposed);
+    if (candidateAnchor) return candidateAnchor.slice(0, 120);
+  }
+  return "";
+}
+
 function intentIsGrounded(
   text: string,
   intent: Intent,
@@ -855,6 +913,10 @@ function materializeAssessment(
       : undefined;
   if (pressureStance) {
     consensusDelta = Math.min(0, consensusDelta);
+    scoreDeltas.progress = 0;
+    scoreDeltas.contribution = Math.min(1, scoreDeltas.contribution);
+    scoreDeltas.listening = Math.min(2, scoreDeltas.listening);
+    scoreDeltas.conflict = Math.min(2, scoreDeltas.conflict);
   }
 
   return {
@@ -879,8 +941,15 @@ function materializeAssessment(
         .map((item) => item.trim())
         .filter((item) => groundedOptions.has(item)),
     ).slice(0, 3),
-    unresolvedConflict:
-      pressureStance?.quote ?? assessment.unresolvedConflict.trim().slice(0, 120),
+    unresolvedConflict: context
+      ? groundedUnresolvedConflict(
+          assessment.unresolvedConflict,
+          text,
+          context,
+          selectedScenario,
+          pressureStance,
+        )
+      : "",
     consensusDelta,
     scoreDeltas,
   };
@@ -1058,6 +1127,15 @@ export function applyUserTurn(
   );
   const intent = assessment.intent;
   const userMessage = message("user", text, turn, intent);
+  const pressureStance =
+    difficulty === "pressure"
+      ? unresolvedPressureStance(text, state, selectedScenario)
+      : undefined;
+  const pressureBlock =
+    difficulty === "pressure" &&
+    (pressureStance || assessment.consensusDelta <= 0)
+      ? { conflict: state.conflict, stance: pressureStance }
+      : undefined;
   const aiMessages = directorResponses(
     intent,
     turn,
@@ -1065,6 +1143,7 @@ export function applyUserTurn(
     selectedScenario,
     difficulty,
     directorTurn?.replies,
+    pressureBlock,
   );
   const voiceMetric = createVoiceMetric(text, turn, voiceCapture);
   const inferredCriteria =
@@ -1083,13 +1162,7 @@ export function applyUserTurn(
       ? unique([...state.finalists, ...proposedOptions]).slice(-3)
       : state.finalists;
 
-  const conflict = assessment.unresolvedConflict
-    ? assessment.unresolvedConflict
-    : intent === "integrate" || intent === "summary"
-      ? "如何在限制条件内兼顾当前两种核心主张？"
-      : intent === "challenge"
-        ? "新提出的风险是否会改变当前选择？"
-        : state.conflict;
+  const conflict = assessment.unresolvedConflict || state.conflict;
 
   return {
     ...state,
@@ -1140,6 +1213,7 @@ export function finishSession(
   const voiceMetric = createVoiceMetric(statement, turn, voiceCapture);
 
   const finalOptions = unique([
+    ...state.finalists,
     ...extractOptions(statement, selectedScenario),
     ...assessment.finalistsAdded,
   ]);
